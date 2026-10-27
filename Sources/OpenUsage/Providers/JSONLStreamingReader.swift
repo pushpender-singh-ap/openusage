@@ -25,12 +25,34 @@ enum JSONLStreamingReader {
         if let upTo {
             precondition(upTo >= startingAt)
         }
+        if JSONLScanning.isCompressed(path: path) {
+            // Compressed offsets are not JSONL offsets. Archives always start with fresh state;
+            // the manifest, rather than tail resumption, avoids repeat decompression.
+            precondition(startingAt == 0 && upTo == nil)
+            let stream = try ZstdStreamingReader(path: path)
+            return try readChunks(initialState: initialState, parse: parse, nextChunk: stream.read)
+        }
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
         defer { try? handle.close() }
         if startingAt > 0 {
             try handle.seek(toOffset: UInt64(startingAt))
         }
+        var bytesRead = startingAt
+        return try readChunks(startingAt: startingAt, initialState: initialState, parse: parse) {
+            let count = upTo.map { min(readChunkBytes, max(0, $0 - bytesRead)) } ?? readChunkBytes
+            guard count > 0 else { return nil }
+            let chunk = try handle.read(upToCount: count)
+            bytesRead += chunk?.count ?? 0
+            return chunk
+        }
+    }
 
+    private static func readChunks<Item: Sendable, State: Sendable>(
+        startingAt: Int = 0,
+        initialState: State,
+        parse: @Sendable (Data, inout State) -> [Item]?,
+        nextChunk: () throws -> Data?
+    ) throws -> Result<Item, State> {
         var state = initialState
         var items: [Item] = []
         var pendingRecord = Data()
@@ -74,10 +96,7 @@ enum JSONLStreamingReader {
 
         while true {
             try Task.checkCancellation()
-            let readCount = upTo.map { min(readChunkBytes, max(0, $0 - streamOffset)) } ?? readChunkBytes
-            guard readCount > 0,
-                  let chunk = try handle.read(upToCount: readCount),
-                  !chunk.isEmpty
+            guard let chunk = try nextChunk(), !chunk.isEmpty
             else { break }
             readAnyBytes = true
 

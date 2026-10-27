@@ -396,7 +396,7 @@ actor JSONLScanCacheWriter {
         }
         return values.isRegularFile == true
             && values.fileSize == metadata.size
-            && values.contentModificationDate == metadata.mtime
+            && (JSONLScanning.isCompressed(path: path) || values.contentModificationDate == metadata.mtime)
     }
 
     private static func createPrivateDirectory(_ url: URL) throws {

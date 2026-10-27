@@ -157,17 +157,25 @@ actor IncrementalJSONLScanner<Item: Codable & Sendable> {
         // Keep other same-parser scans' files in the shared partition until they age out of the window.
         // This lets multi-account cards with disjoint roots share one actor safely; only the current
         // call's input paths are returned below.
-        var nextCache = currentCache.filter { $0.value.mtime >= since }
+        // Immutable archives must survive window changes: only their record timestamps determine
+        // which days count. Keep their parsed events so even old archives are decompressed just once.
+        var nextCache = currentCache.filter {
+            if JSONLScanning.isCompressed(path: $0.key) {
+                return FileManager.default.fileExists(atPath: $0.key)
+            }
+            return $0.value.mtime >= since
+        }
         var toParse: [JSONLParseRequest] = []
         var resumeItems: [String: [Item]] = [:]
         for file in files {
-            guard file.mtime >= since else { continue }
-            if let cached = currentCache[file.path], cached.size == file.size, cached.mtime == file.mtime {
+            guard file.isCompressed || file.mtime >= since else { continue }
+            if let cached = currentCache[file.path], cached.size == file.size,
+               file.isCompressed || cached.mtime == file.mtime {
                 nextCache[file.path] = cached
             } else {
                 nextCache[file.path] = nil
                 var resume: JSONLResumeHint?
-                if case .tail = strategy,
+                if !file.isCompressed, case .tail = strategy,
                    let cached = currentCache[file.path],
                    let offset = cached.parsedOffset,
                    let fingerprint = cached.tailFingerprint,

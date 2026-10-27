@@ -49,10 +49,13 @@ Claude, Codex, Grok, and pi share `IncrementalJSONLScanner` for local JSONL hist
 are cached by path, size, and modification time in a versioned Application Support store, partitioned by
 provider/home identity. Provider instances reading the same home share one scanner actor, which avoids
 duplicate parsing across cards; the disk store provides the reuse across process launches. Scans drop
-source-file records as their modification dates leave the requested history window, while aggregation and
+plain source-file records as their modification dates leave the requested history window, while aggregation and
 pricing still run on every refresh from the cached events. Files are read in small bounded batches;
 unusually large individual records are skipped and logged so media-heavy or malformed histories cannot
-exhaust memory.
+exhaust memory. Codex also discovers `.jsonl.zst` rollouts. The official zstd SPM C library feeds
+bounded decompressed chunks into the same single-pass JSONL reader. Archives never use tail offsets;
+the cache matches them by path and compressed size and retains their events while the source exists,
+regardless of modification date. Aggregation filters those events by their original timestamps.
 
 ## Local subprocesses
 

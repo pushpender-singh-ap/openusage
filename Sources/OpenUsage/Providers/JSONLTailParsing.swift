@@ -104,7 +104,7 @@ enum JSONLTailIO {
         case .streamed(let parse):
             return parse(request.file)
         case .tail(let parser):
-            if let resume = request.resume,
+            if !request.file.isCompressed, let resume = request.resume,
                let result = tailParse(file: request.file, resume: resume, parser: parser)
             {
                 return result
@@ -124,7 +124,7 @@ enum JSONLTailIO {
             guard let items = streamed.items else {
                 return JSONLParseResult(outcome: .skipped, oversizedRecordCount: streamed.oversizedRecordCount)
             }
-            guard streamed.endsAtLineBoundary, streamed.parsedOffset == file.size,
+            guard !file.isCompressed, streamed.endsAtLineBoundary, streamed.parsedOffset == file.size,
                   let fingerprint = fingerprint(path: file.path, endingAt: file.size)
             else {
                 return JSONLParseResult(

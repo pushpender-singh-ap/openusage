@@ -1,7 +1,7 @@
 import Foundation
 
 /// Builds daily token/cost estimates for Codex by scanning the Codex CLI's local session rollouts
-/// natively (`$CODEX_HOME/sessions/**/*.jsonl` + `archived_sessions/`), replacing the external
+/// natively (`.jsonl` and `.jsonl.zst` in `$CODEX_HOME/sessions/` + `archived_sessions/`), replacing the external
 /// `ccusage` CLI.
 ///
 /// Ports ccusage's Codex adapter semantics:
@@ -79,7 +79,7 @@ actor CodexLogUsageScanner {
     /// once. The version is the parser schema version; bump it when `Event` semantics change.
     private static let sharedScanner = IncrementalJSONLScanner<Event>(
         logTag: LogTag.plugin("codex"),
-        persistence: JSONLScanCachePersistence(namespace: "codex", schemaVersion: 7)
+        persistence: JSONLScanCachePersistence(namespace: "codex", schemaVersion: 8)
     )
 
     static func flushPersistentCacheWrites() async {
@@ -153,7 +153,7 @@ actor CodexLogUsageScanner {
         return [homeDirectory().appendingPathComponent(".codex")] + extra
     }
 
-    /// Every rollout `*.jsonl` under each home's `sessions/` and `archived_sessions/` (a home with
+    /// Every rollout `*.jsonl` or `*.jsonl.zst` under each home's `sessions/` and `archived_sessions/` (a home with
     /// neither is scanned directly, ccusage's fallback). When both dirs of one home contain the same
     /// relative path, the `sessions/` copy wins — an archived duplicate must not double-count.
     /// A dir linked into another account's home (xswap's shared history) counts only with that home.
@@ -164,6 +164,7 @@ actor CodexLogUsageScanner {
             .subtracting(homes.flatMap(ownSessionDirs(of:)))
         for home in homes {
             var seenRelative: Set<String> = []
+            var candidates: [(file: JSONLScanning.DiscoveredFile, relative: String)] = []
             var sourceDirs: [URL] = []
             for name in ["sessions", "archived_sessions"] {
                 let dir = home.appendingPathComponent(name)
@@ -179,11 +180,24 @@ actor CodexLogUsageScanner {
             // resolved dir as their prefix — resolve here too or the relative keys (and the
             // cross-home dir dedup) stop matching for symlinked Codex homes.
             for dir in sourceDirs.map({ $0.resolvingSymlinksInPath() }) where seenDirs.insert(dir.path).inserted {
-                for file in JSONLScanning.jsonlFiles(under: dir) {
+                for file in JSONLScanning.jsonlFiles(under: dir, includeCompressed: true) {
                     let relative = String(file.path.dropFirst(dir.path.count))
-                    guard seenRelative.insert(relative).inserted else { continue }
-                    files.append(file)
+                    candidates.append((file, relative))
                 }
+            }
+            // Compression/archiving can move a rollout to another subdirectory. Prefer its plain
+            // basename anywhere in this home, while keeping account ownership boundaries intact.
+            let plainNames = Set(candidates.filter { !$0.file.isCompressed }.map {
+                URL(fileURLWithPath: $0.file.path).lastPathComponent
+            })
+            var seenArchives: Set<String> = []
+            for (file, relative) in candidates {
+                if file.isCompressed {
+                    let name = URL(fileURLWithPath: file.path).deletingPathExtension().lastPathComponent
+                    guard !plainNames.contains(name), seenArchives.insert(name).inserted else { continue }
+                }
+                guard seenRelative.insert(relative).inserted else { continue }
+                files.append(file)
             }
         }
         return files

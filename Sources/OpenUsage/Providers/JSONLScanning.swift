@@ -9,7 +9,11 @@ enum JSONLScanning {
         var path: String
         var size: Int
         var mtime: Date
+
+        var isCompressed: Bool { JSONLScanning.isCompressed(path: path) }
     }
+
+    static func isCompressed(path: String) -> Bool { path.hasSuffix(".jsonl.zst") }
 
     /// Start of the day `daysBack` days before `now` — the lower bound of the scan window.
     static func sinceDate(daysBack: Int, now: Date) -> Date {
@@ -19,7 +23,7 @@ enum JSONLScanning {
 
     /// Every `*.jsonl` regular file under `dir` (recursively), path-sorted so a keep-first dedup is
     /// deterministic. Empty when `dir` can't be enumerated.
-    static func jsonlFiles(under dir: URL) -> [DiscoveredFile] {
+    static func jsonlFiles(under dir: URL, includeCompressed: Bool = false) -> [DiscoveredFile] {
         // `FileManager.enumerator` silently yields nothing when `dir` itself is a symlink.
         // Resolve first so the enumeration sees the real directory.
         let dir = dir.resolvingSymlinksInPath()
@@ -29,7 +33,7 @@ enum JSONLScanning {
         ) else { return [] }
         var files: [DiscoveredFile] = []
         for case let url as URL in enumerator {
-            guard url.pathExtension == "jsonl",
+            guard url.pathExtension == "jsonl" || (includeCompressed && isCompressed(path: url.path)),
                   let values = try? url.resourceValues(forKeys: Set(keys)),
                   values.isRegularFile == true
             else { continue }

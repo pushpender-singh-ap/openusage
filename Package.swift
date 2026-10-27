@@ -17,7 +17,10 @@ let package = Package(
         // behind other apps for menu-bar (dockless) apps (sparkle-project/Sparkle#2889).
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.9.4"),
         // Anonymous usage analytics and mandatory crash reporting (official first-party Swift SDK).
-        .package(url: "https://github.com/PostHog/posthog-ios.git", from: "3.62.0")
+        .package(url: "https://github.com/PostHog/posthog-ios.git", from: "3.62.0"),
+        // Codex compresses finalized rollouts with Zstandard (unsupported by Apple's Compression).
+        // Build the official C library from source for both architectures; no external CLI needed.
+        .package(url: "https://github.com/facebook/zstd", exact: "1.5.7")
     ],
     targets: [
         .target(
@@ -25,7 +28,8 @@ let package = Package(
             dependencies: [
                 .product(name: "KeyboardShortcuts", package: "KeyboardShortcuts"),
                 .product(name: "Sparkle", package: "Sparkle"),
-                .product(name: "PostHog", package: "posthog-ios")
+                .product(name: "PostHog", package: "posthog-ios"),
+                .product(name: "libzstd", package: "zstd")
             ],
             path: "Sources/OpenUsage",
             resources: [
@@ -56,7 +60,7 @@ let package = Package(
         ),
         .testTarget(
             name: "OpenUsageTests",
-            dependencies: ["OpenUsage"],
+            dependencies: ["OpenUsage", .product(name: "libzstd", package: "zstd")],
             path: "Tests/OpenUsageTests",
             swiftSettings: [
                 .swiftLanguageMode(.v6)

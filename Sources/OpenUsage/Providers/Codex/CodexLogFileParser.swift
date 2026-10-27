@@ -5,6 +5,7 @@ struct CodexLogFileParser: Sendable {
     private static let typeMarker = Data(#""type":""#.utf8)
     private static let turnContextToken = Data(#"turn_context""#.utf8)
     private static let tokenCountToken = Data(#"token_count""#.utf8)
+    private static let tokenUsageRecordToken = Data(#"token_usage_record""#.utf8)
     private static let sessionMetaToken = Data(#"session_meta""#.utf8)
     private static let taskStartedToken = Data(#"task_started""#.utf8)
     private static let threadSettingsToken = Data(#"thread_settings_applied""#.utf8)
@@ -16,6 +17,19 @@ struct CodexLogFileParser: Sendable {
         var currentTierIsUltrafast = false
         var sawSessionMeta = false
         var replayGate: ChildReplayGate?
+        var previousTurnUsage: TurnUsage?
+        var lastUsageRecord: UsageRecord?
+    }
+
+    struct TurnUsage: Codable, Sendable, Equatable {
+        var id: String?
+        var totals: CodexLogUsageScanner.RawUsage
+    }
+
+    struct UsageRecord: Codable, Sendable, Equatable {
+        var timestamp: Date
+        var usage: CodexLogUsageScanner.RawUsage
+        var isTokenUsageRecord: Bool
     }
 
     var state: ParseState
@@ -30,6 +44,7 @@ struct CodexLogFileParser: Sendable {
         for line in data.split(separator: UInt8(ascii: "\n")) {
             var seesTurnContext = false
             var seesTokenCount = false
+            var seesTokenUsageRecord = false
             var seesSessionMeta = false
             var seesTaskStarted = false
             var seesThreadSettings = false
@@ -38,6 +53,7 @@ struct CodexLogFileParser: Sendable {
                 let value = line[found.upperBound...]
                 if value.starts(with: Self.turnContextToken) { seesTurnContext = true }
                 else if value.starts(with: Self.tokenCountToken) { seesTokenCount = true }
+                else if value.starts(with: Self.tokenUsageRecordToken) { seesTokenUsageRecord = true }
                 else if value.starts(with: Self.sessionMetaToken) { seesSessionMeta = true }
                 else if value.starts(with: Self.taskStartedToken) { seesTaskStarted = true }
                 else if value.starts(with: Self.threadSettingsToken) { seesThreadSettings = true }
@@ -46,10 +62,10 @@ struct CodexLogFileParser: Sendable {
 
             let isTurnContext = seesTurnContext
             let isSessionMeta = !state.sawSessionMeta && seesSessionMeta
-            let isTaskStarted = state.replayGate != nil && seesTaskStarted
+            let isTaskStarted = seesTaskStarted
             let isThreadSettings = seesThreadSettings
             guard isTurnContext || isSessionMeta || isTaskStarted || isThreadSettings
-                || seesTokenCount
+                || seesTokenCount || seesTokenUsageRecord
             else { continue }
             guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { continue }
 
@@ -83,10 +99,14 @@ struct CodexLogFileParser: Sendable {
                 }
                 continue
             }
-            guard type == "event_msg", let payload else { continue }
+            let isTokenUsageRecord = type == "token_usage_record"
+            guard type == "event_msg" || isTokenUsageRecord else { continue }
+            // Rollout records normally carry payload; accept flattened usage records too.
+            guard let payload = payload ?? (isTokenUsageRecord ? object : nil) else { continue }
 
             // Replayed task starts retain the parent's older start time; the first live turn opens the gate.
-            if payload["type"] as? String == "task_started" {
+            if type == "event_msg", payload["type"] as? String == "task_started" {
+                state.previousTurnUsage = nil
                 if let gate = state.replayGate,
                    let startedAt = payload["started_at"] as? NSNumber,
                    gate.isCleared(byStartedAt: startedAt.doubleValue, lineTimestamp: object["timestamp"] as? String) {
@@ -94,13 +114,18 @@ struct CodexLogFileParser: Sendable {
                 }
                 continue
             }
-            guard payload["type"] as? String == "token_count",
+            guard isTokenUsageRecord || payload["type"] as? String == "token_count",
                   let timestampRaw = (object["timestamp"] as? String)?.trimmingCharacters(in: .whitespaces),
                   let timestamp = OpenUsageISO8601.date(from: timestampRaw)
             else { continue }
 
             let info = payload["info"] as? [String: Any]
-            let totals = (info?["total_token_usage"] as? [String: Any]).map(CodexLogUsageScanner.RawUsage.init(json:))
+            let totalsJSON = isTokenUsageRecord ? payload["thread_token_usage"] : info?["total_token_usage"]
+            let totals = (totalsJSON as? [String: Any]).map(CodexLogUsageScanner.RawUsage.init(json:))
+            let turnTotals = (payload["turn_token_usage"] as? [String: Any]).map(CodexLogUsageScanner.RawUsage.init(json:))
+            let turnID = payload["turn_id"] as? String
+            let previousTurnTotals = state.previousTurnUsage.flatMap { $0.id == turnID ? $0.totals : nil }
+            if let turnTotals { state.previousTurnUsage = TurnUsage(id: turnID, totals: turnTotals) }
 
             // Parent history still seeds cumulative totals, but must never become chargeable child usage.
             if state.replayGate != nil {
@@ -114,15 +139,30 @@ struct CodexLogFileParser: Sendable {
             }
 
             let usage: CodexLogUsageScanner.RawUsage
-            if let last = (info?["last_token_usage"] as? [String: Any]).map(CodexLogUsageScanner.RawUsage.init(json:)) {
+            let lastJSON = isTokenUsageRecord ? payload["usage"] : info?["last_token_usage"]
+            if let last = (lastJSON as? [String: Any]).map(CodexLogUsageScanner.RawUsage.init(json:)) {
                 usage = last
             } else if let totals {
                 usage = totals.subtracting(state.previousTotals)
+            } else if let turnTotals {
+                usage = turnTotals.subtracting(previousTurnTotals)
             } else {
                 continue
             }
+            let lacksSharedTotals = totals == nil || state.previousTotals == nil
             if let totals { state.previousTotals = totals }
             guard usage.input > 0 || usage.cached > 0 || usage.output > 0 || usage.reasoning > 0 else { continue }
+
+            // Both representations can describe one response. Shared cumulative totals above handle
+            // the usual case, even with different timestamps. Without totals, match the paired record
+            // by timestamp and measured usage; never collapse two distinct same-format responses.
+            if lacksSharedTotals, let last = state.lastUsageRecord, last.isTokenUsageRecord != isTokenUsageRecord,
+               last.timestamp == timestamp, last.usage.equalCounts(usage) {
+                continue
+            }
+            state.lastUsageRecord = UsageRecord(
+                timestamp: timestamp, usage: usage, isTokenUsageRecord: isTokenUsageRecord
+            )
 
             let parsedModel = Self.modelName(in: payload) ?? info.flatMap(Self.modelName(in:))
             let model = CodexLogUsageScanner.resolveModel(parsed: parsedModel, currentModel: &state.currentModel)

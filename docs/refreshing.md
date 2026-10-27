@@ -25,13 +25,17 @@ A cached value only counts as *fresh* (skip-a-refresh fresh) when it was fetched
 Claude, Codex, and pi spend history has a separate local-log parse cache under
 `~/Library/Application Support/OpenUsage/log-scan-cache/`. It stores parsed usage events before OpenUsage
 applies model-rate estimates, so pricing updates take effect without re-reading unchanged JSONL. On
-relaunch, an entry is reused only when its path, size, modification time, and parser version still match.
+relaunch, a plain-log entry is reused only when its path, size, modification time, and parser version still match.
+Codex compressed rollouts are immutable: their entries match by path, compressed size, and parser version.
+They are streamed once and retained across history-window changes, so older archives are not repeatedly
+decompressed. Their recorded event dates determine which usage falls inside the window.
 When a supported JSONL file only grows, the scanner resumes from the last complete line and reads only
 the appended bytes. A changed prefix, truncated file, incomplete appended line, or unusable parser state
 falls back to a full streamed parse instead of dropping that record. Same-home cards share parsed data,
-and changing one source file rewrites only that file's record. Old files leave the cache as the history
-window advances, and identities unused for 35 days are removed. App writes are debounced until after
-refresh; the one-shot CLI drains pending writes before it exits.
+and changing one source file rewrites only that file's record. Old plain-log files leave the cache as the
+history window advances; compressed-file entries are removed when their source is deleted. Identities
+unused for 35 days are removed. App writes are debounced until after refresh; the one-shot CLI drains
+pending writes before it exits.
 
 The append-only scanner is adapted from Runway (mstallone/runway, MIT). The Codex line scan checks
 event markers in one pass, also adapted from Runway #45.
