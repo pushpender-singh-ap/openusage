@@ -2,8 +2,8 @@ import SwiftUI
 
 /// A dashboard hint/banner card: a leading glyph, a title + message, a primary action button, and a
 /// trailing dismiss (✕). A grouped content card (`cardSurface`) that scrolls with the sections. Shared
-/// scaffolding for the first-run `CustomizeHintCard`, the `UpdateBannerCard`, and the
-/// `NewVersionNoticeCard`, so they read as one family and a spacing/appearance tweak lands in one place.
+/// scaffolding for the first-run `CustomizeHintCard` and the `UpdateBannerCard`, so they read as one
+/// family and a spacing/appearance tweak lands in one place.
 /// Callers supply the copy and the two closures (each wraps its own animation as needed). A `tint` turns
 /// the card into a warning: tinted glyph, fill, border, and a prominent action button.
 struct DismissableHintCard: View {

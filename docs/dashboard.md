@@ -8,8 +8,6 @@ A fresh install opens a welcome screen instead of turning providers on by itself
 
 When no provider is on, the dashboard shows **Choose Providers**, which opens Customize.
 
-An orange **A New OpenUsage Is Coming** card sits at the very top of the dashboard for everyone. It warns that the next update removes spend and token tracking and moves sign-in into the app. **Read What's Changing** opens [the announcement](https://github.com/robinebers/openusage/issues/1441). The ✕ asks you to confirm before the card goes away for good.
-
 Updates never change the providers you already have on or off — but when an update ships a provider you've never seen, a local check runs once for just that provider and turns it on only if you actually have the tool. See [Which Providers Are On](provider-enablement.md) for the full lifecycle.
 
 Each provider card leads with its **Always Visible** metrics. When a card is collapsed, On Demand metrics and quick links are hidden behind the in-card caret at the bottom. Click it to expand: a thin line marks the boundary after Always Visible, followed by the On Demand rows and quick links, with the caret at the bottom of the card. Click the caret again to collapse. Open cards stay open across popover closes and app restarts. A provider with neither On Demand metrics nor quick links shows no line or caret.
