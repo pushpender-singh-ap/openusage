@@ -244,6 +244,9 @@ final class ZAIProviderTests: XCTestCase {
                 if request.url == ZAIUsageClient.quotaURL {
                     return jsonResponse(quotaBothLimitsJSON)
                 }
+                if request.url.path == ZAIUsageClient.modelUsageURL.path {
+                    return jsonResponse(#"{"data":{"x_time":[],"tokensUsage":[]}}"#)
+                }
                 return jsonResponse(subscriptionJSON)
             }),
             now: { Date(timeIntervalSince1970: 1_800_000_000) }
@@ -253,6 +256,7 @@ final class ZAIProviderTests: XCTestCase {
 
         XCTAssertEqual(snapshot.plan, "GLM Coding Max")
         XCTAssertNil(snapshot.errorCategory)
+        XCTAssertNil(snapshot.warning)
         XCTAssertNotNil(snapshot.line(label: "Session"))
         XCTAssertNotNil(snapshot.line(label: "Web Searches"))
     }

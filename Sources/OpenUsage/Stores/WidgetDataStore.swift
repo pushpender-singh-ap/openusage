@@ -697,7 +697,7 @@ final class WidgetDataStore {
             // The ⓘ is data-driven: it shows when a *shown* value is locally estimated (a spend row's
             // dollars) and stays off for a measured one (its tokens), so the tokens-only tile reads clean.
             data.infoNote = data.selectedValues.contains(where: \.estimated)
-                ? WidgetData.localEstimateNote
+                ? (descriptor.sample.valueTooltipNote ?? WidgetData.localEstimateNote)
                 : descriptor.sample.infoNote
             return data
         case .badge(_, let text, _, let subtitle):

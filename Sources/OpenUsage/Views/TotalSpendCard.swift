@@ -105,7 +105,11 @@ struct TotalSpendCard: View {
     /// tooltip lie about what the total reflects.
     private var infoTooltip: String {
         let names = providers.map(\.displayName)
-        return "Only includes \(names.formatted(.list(type: .and)))."
+        let summary = "Only includes \(names.formatted(.list(type: .and)))."
+        let notes: [String] = metric.usesDollarEstimateNote ? projection.slices.filter(\.estimated).compactMap { slice in
+            layout.orderedSupportedMetrics(for: slice.id).first(where: \.isSpendTile)?.sample.valueTooltipNote
+        } : []
+        return ([summary] + notes).joined(separator: "\n\n")
     }
 
     private var shareButton: some View {

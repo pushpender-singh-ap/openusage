@@ -15,15 +15,21 @@ final class ZAIProvider: ProviderRuntime {
     let authStore: ZAIAuthStore
     let usageClient: ZAIUsageClient
     let now: @Sendable () -> Date
+    let pricing: @Sendable () async -> ModelPricing
+
+    static let costEstimateNote = "Approximate API cost: all reported tokens are treated as GLM-5.3 input. "
+        + "Input, output, and cached tokens are not separated. This is not your subscription bill."
 
     init(
         authStore: ZAIAuthStore = ZAIAuthStore(),
         usageClient: ZAIUsageClient = ZAIUsageClient(),
-        now: @escaping @Sendable () -> Date = Date.init
+        now: @escaping @Sendable () -> Date = Date.init,
+        pricing: @escaping @Sendable () async -> ModelPricing = { await ModelPricingStore.shared.current() }
     ) {
         self.authStore = authStore
         self.usageClient = usageClient
         self.now = now
+        self.pricing = pricing
     }
 
     var widgetDescriptors: [WidgetDescriptor] {
@@ -38,7 +44,7 @@ final class ZAIProvider: ProviderRuntime {
                           metricLabel: "Web Searches", limit: 1000, suffix: "searches",
                           periodDurationMs: ZAIUsageMapper.monthlyPeriodMs)
                 .exportingLimit("webSearches", unit: "searches")
-        ]
+        ] + WidgetDescriptor.spendTiles(provider: provider, valueTooltipNote: Self.costEstimateNote)
     }
 
     func hasLocalCredentials() async -> Bool {
@@ -47,6 +53,7 @@ final class ZAIProvider: ProviderRuntime {
     }
 
     func refresh() async -> ProviderSnapshot {
+        let refreshedAt = now()
         guard let auth = await loadOffMainActor({ [authStore] in authStore.loadAPIKey() }) else {
             return ProviderSnapshot.error(provider: provider, error: ZAIAuthError.missingKey)
         }
@@ -67,7 +74,14 @@ final class ZAIProvider: ProviderRuntime {
             }
             do {
                 let mapped = try ZAIUsageMapper.map(quotaBody: body, subscriptionBody: subscription)
-                return ProviderSnapshot.make(provider: provider, plan: mapped.plan, lines: mapped.lines, refreshedAt: now())
+                let history = await loadHistory(apiKey: auth.apiKey, now: refreshedAt)
+                var lines = mapped.lines
+                if !history.lines.isEmpty {
+                    lines.removeAll { $0 == .noUsageData }
+                    lines += history.lines
+                }
+                return ProviderSnapshot.make(provider: provider, plan: mapped.plan, lines: lines,
+                                             refreshedAt: refreshedAt, warning: history.warning)
             } catch {
                 return ProviderSnapshot.error(provider: provider, error: error)
             }
@@ -78,9 +92,36 @@ final class ZAIProvider: ProviderRuntime {
         }
     }
 
-    /// Run the required quota call and classify the outcome: the body on 2xx, an auth failure on
+    /// History failure must explain the missing rows without hiding healthy quota meters.
+    private func loadHistory(apiKey: String, now: Date) async -> (lines: [MetricLine], warning: String?) {
+        let result = await load { try await usageClient.fetchModelUsage(apiKey: apiKey, now: now) }
+        do {
+            switch result {
+            case .success(let body):
+                let usage = try ZAIUsageHistoryMapper.map(body, now: now, pricing: await pricing())
+                var lines: [MetricLine] = []
+                SpendTileMapper.appendTokenUsage(usage, to: &lines, now: now, estimated: true)
+                if usage.daily.contains(where: { $0.totalTokens > 0 && $0.costUSD == nil }) {
+                    let warning = "GLM-5.3 pricing unavailable. Showing Z.ai tokens only."
+                    AppLog.warn(LogTag.plugin("zai"), warning)
+                    return (lines, warning)
+                }
+                return (lines, nil)
+            case .authFailure:
+                throw ZAIAuthError.invalidKey
+            case .failed(let error):
+                throw error
+            }
+        } catch {
+            let warning = "Couldn't load Z.ai usage history. \(error.localizedDescription)"
+            AppLog.warn(LogTag.plugin("zai"), warning)
+            return ([], warning)
+        }
+    }
+
+    /// Run a usage call and classify the outcome: the body on 2xx, an auth failure on
     /// 401/403, or a typed failure for any other non-2xx, transport error, or empty body.
-    private func load(_ call: () async throws -> HTTPResponse) async -> QuotaResult {
+    private func load(_ call: () async throws -> HTTPResponse) async -> UsageResult {
         do {
             let response = try await call()
             if response.statusCode == 401 || response.statusCode == 403 { return .authFailure }
@@ -114,7 +155,7 @@ extension ZAIProvider: APIKeyManaging {
     func deleteAPIKey() throws { try authStore.deleteAPIKey() }
 }
 
-private enum QuotaResult {
+private enum UsageResult {
     case success(Data)
     case authFailure
     case failed(ZAIUsageError)

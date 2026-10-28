@@ -3,6 +3,7 @@ import Foundation
 struct ZAIUsageClient: Sendable {
     static let subscriptionURL = URL(string: "https://api.z.ai/api/biz/subscription/list")!
     static let quotaURL = URL(string: "https://api.z.ai/api/monitor/usage/quota/limit")!
+    static let modelUsageURL = URL(string: "https://api.z.ai/api/monitor/usage/model-usage")!
 
     var http: any HTTPClient
 
@@ -19,6 +20,24 @@ struct ZAIUsageClient: Sendable {
     /// Session token usage and web-search quotas. Required for a usable snapshot.
     func fetchQuota(apiKey: String) async throws -> HTTPResponse {
         try await get(Self.quotaURL, apiKey: apiKey)
+    }
+
+    /// The same date-range endpoint used by Z.ai's official usage-query plugin. A month-long
+    /// request returns daily buckets, including today, rather than the short range's hourly buckets.
+    func fetchModelUsage(apiKey: String, now: Date, calendar: Calendar = .current) async throws -> HTTPResponse {
+        let start = calendar.date(byAdding: .day, value: -UsageHistoryWindow.previousDays,
+                                  to: calendar.startOfDay(for: now))!
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        var url = URLComponents(url: Self.modelUsageURL, resolvingAgainstBaseURL: false)!
+        url.queryItems = [
+            URLQueryItem(name: "startTime", value: formatter.string(from: start)),
+            URLQueryItem(name: "endTime", value: formatter.string(from: now))
+        ]
+        return try await get(url.url!, apiKey: apiKey)
     }
 
     private func get(_ url: URL, apiKey: String) async throws -> HTTPResponse {

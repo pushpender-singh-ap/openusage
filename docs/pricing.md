@@ -1,6 +1,6 @@
 # Model Pricing
 
-How OpenUsage turns token counts into the estimated dollars on the Claude, Codex, Cursor, and Grok spend tiles. Grok uses the cost recorded in its session logs when available and only estimates older turns without one. OpenRouter and OpenCode do not use these estimates because their sources already report the cost directly.
+How OpenUsage turns token counts into the estimated dollars on the Claude, Codex, Cursor, Grok, and Z.ai spend tiles. Grok uses the cost recorded in its session logs when available and only estimates older turns without one. OpenRouter and OpenCode do not use these estimates because their sources already report the cost directly.
 
 ## Where prices come from
 
@@ -47,6 +47,8 @@ GPT-6 Sol, GPT-6.1 Sol, and GPT-6 Luna use the rates on [OpenAI's pricing page](
 ## What the estimate includes
 
 Costs are computed per usage event from four token buckets — plain input, cache writes, cache reads, and output — at the model's per-million-token rates, including 1-hour cache-write pricing, long-context tiers, and fast-variant multipliers. Most catalog tiers start above 200k prompt tokens; supported GPT-5.4, GPT-5.5, GPT-5.6, and GPT-6 Codex models switch above 272k input tokens. In either case, the higher rate applies to the whole request. A published cache discount is used when available; Codex cached input falls back to the full input rate when the source publishes no discount. Cursor's export combines many requests into each row, so OpenUsage uses the normal rate there rather than guessing that one request crossed the limit. When a Claude or Grok session records its own cost, that amount is used as-is. Nested Claude advisor usage has no carried cost, so it is priced separately from its tokens using the advisor model. Estimates represent API-rate value rather than a subscription bill.
+
+Z.ai uses an owner-selected approximation because its account history reports only total tokens: all tokens are priced as GLM-5.3 input through the shared engine (currently $1.40 per million). The input/output/cache mix is unknown, and daily totals do not trigger per-request long-context tiers. The estimate applies to the full account history, including any other models previously used, and its notes explicitly state the assumption. Tokens and estimated dollars contribute to the top totals; no account history is added to machine-local iCloud aggregation.
 
 ## Privacy
 
