@@ -15,7 +15,10 @@ set -euo pipefail
 #   OPENUSAGE_VERSION     human version, e.g. 0.7.0 (CFBundleShortVersionString)
 # Optional env:
 #   OPENUSAGE_BUILD       CFBundleVersion (monotonic). Default: git commit count.
-#   FEED_URL              appcast URL baked into the app. Default: GitHub Pages project URL.
+#   FEED_URL              appcast URL baked into the app. Default: appcast.xml on the fork's latest GitHub release.
+#   NOTARY_KEYCHAIN_PROFILE  notarytool keychain profile for LOCAL builds, saved once with
+#                         `xcrun notarytool store-credentials <name> --apple-id <id> --team-id <team>`.
+#                         Takes precedence over the three NOTARY_* values below.
 #   NOTARY_APPLE_ID / NOTARY_APP_PASSWORD / NOTARY_TEAM_ID   Apple ID, app-specific password, and team
 #                         ID for notarytool. When all three are set, the app and DMG are notarized + stapled.
 #   ALLOW_UNNOTARIZED=1   Skip notarization for a LOCAL dry run. Without it, missing notary creds is a
@@ -30,7 +33,9 @@ cd "$ROOT_DIR"
 : "${OPENUSAGE_VERSION:?set OPENUSAGE_VERSION, e.g. 0.7.0}"
 
 APP_NAME="OpenUsage"
-BUNDLE_ID="com.robinebers.openusage"
+BUNDLE_ID="com.pushpendersingh.openusage"
+# Must match the container in the Developer ID provisioning profile and the release entitlements.
+ICLOUD_CONTAINER_ID="iCloud.$BUNDLE_ID"
 MIN_SYSTEM_VERSION="15.0"
 VERSION="$OPENUSAGE_VERSION"
 # CFBundleShortVersionString carries the full version, including any pre-release suffix (e.g.
@@ -39,7 +44,7 @@ VERSION="$OPENUSAGE_VERSION"
 # monotonic commit count below), not this string, and Developer ID notarization does not require it to
 # be numeric. (Sparkle's own docs use a beta short version, e.g. "2.0b1".)
 BUILD="${OPENUSAGE_BUILD:-$(git rev-list --count HEAD)}"
-FEED_URL="${FEED_URL:-https://robinebers.github.io/openusage/appcast.xml}"
+FEED_URL="${FEED_URL:-https://github.com/pushpender-singh-ap/openusage/releases/latest/download/appcast.xml}"
 DMG_NAME="$APP_NAME-$VERSION.dmg"
 
 DIST_DIR="$ROOT_DIR/dist"
@@ -62,19 +67,23 @@ ENTITLEMENTS="$DIST_DIR/OpenUsage.release.resolved.entitlements.plist"
 # opt out with ALLOW_UNNOTARIZED=1 (the build will then be Gatekeeper-blocked on other Macs). Missing
 # creds without that opt-out is a hard error so CI never publishes an un-notarized DMG.
 NOTARIZE=0
-if [ -n "${NOTARY_APPLE_ID:-}" ] && [ -n "${NOTARY_APP_PASSWORD:-}" ] && [ -n "${NOTARY_TEAM_ID:-}" ]; then
+NOTARY_AUTH=()
+if [ -n "${NOTARY_KEYCHAIN_PROFILE:-}" ]; then
   NOTARIZE=1
+  NOTARY_AUTH=(--keychain-profile "$NOTARY_KEYCHAIN_PROFILE")
+elif [ -n "${NOTARY_APPLE_ID:-}" ] && [ -n "${NOTARY_APP_PASSWORD:-}" ] && [ -n "${NOTARY_TEAM_ID:-}" ]; then
+  NOTARIZE=1
+  NOTARY_AUTH=(--apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_APP_PASSWORD" --team-id "$NOTARY_TEAM_ID")
 elif [ "${ALLOW_UNNOTARIZED:-}" = "1" ]; then
   echo "WARNING: ALLOW_UNNOTARIZED=1 — build will NOT be notarized (other Macs will block it)." >&2
 else
-  echo "Notarization creds missing (NOTARY_APPLE_ID / NOTARY_APP_PASSWORD / NOTARY_TEAM_ID)." >&2
+  echo "Notarization creds missing (NOTARY_KEYCHAIN_PROFILE, or NOTARY_APPLE_ID / NOTARY_APP_PASSWORD / NOTARY_TEAM_ID)." >&2
   echo "Set them, or set ALLOW_UNNOTARIZED=1 for a local dry run." >&2
   exit 1
 fi
 
 notarize() {  # $1: artifact to submit (.zip or .dmg)
-  xcrun notarytool submit "$1" \
-    --apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_APP_PASSWORD" --team-id "$NOTARY_TEAM_ID" --wait
+  xcrun notarytool submit "$1" "${NOTARY_AUTH[@]}" --wait
 }
 
 echo "==> building $APP_NAME $VERSION ($BUILD) — universal (arm64 + x86_64)"
@@ -186,7 +195,7 @@ cat >"$APP_CONTENTS/Info.plist" <<PLIST
   <key>SUScheduledCheckInterval</key><integer>3600</integer>
   <key>NSUbiquitousContainers</key>
   <dict>
-    <key>iCloud.com.robinebers.openusage</key>
+    <key>$ICLOUD_CONTAINER_ID</key>
     <dict>
       <key>NSUbiquitousContainerIsDocumentScopePublic</key><false/>
       <key>NSUbiquitousContainerName</key><string>OpenUsage</string>
@@ -200,7 +209,7 @@ PLIST
 cp "$ICLOUD_PROVISIONING_PROFILE" "$APP_CONTENTS/embedded.provisionprofile"
 "$ROOT_DIR/script/render_icloud_entitlements.sh" \
   "$ENTITLEMENTS_TEMPLATE" "$ICLOUD_PROVISIONING_PROFILE" "$ENTITLEMENTS" \
-  "iCloud.com.robinebers.openusage"
+  "$ICLOUD_CONTAINER_ID"
 
 # Embed + sign Sparkle (Developer ID, hardened runtime, secure timestamp).
 "$ROOT_DIR/script/embed_sparkle.sh" "$APP_BUNDLE" "$APP_BINARY" "$CODESIGN_IDENTITY" "--options runtime --timestamp"
@@ -211,7 +220,7 @@ echo "==> signing app (Developer ID, hardened runtime)"
 codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
   --sign "$CODESIGN_IDENTITY" "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
-codesign -d --entitlements :- "$APP_BUNDLE" 2>&1 | grep -q "iCloud.com.robinebers.openusage" \
+codesign -d --entitlements :- "$APP_BUNDLE" 2>&1 | grep -q "$ICLOUD_CONTAINER_ID" \
   || { echo "signed app is missing the production iCloud entitlement" >&2; exit 1; }
 
 # Notarize + staple the app itself (not just the DMG) so it launches cleanly even offline after a
@@ -245,4 +254,4 @@ fi
 echo "==> done"
 echo "    DMG:  $DMG_PATH"
 echo "    dSYM: $APP_DSYM (uploaded to PostHog for crash symbolication by release.yml)."
-echo "    The appcast is generated from this DMG by generate_appcast (see release.yml)."
+echo "    The appcast is generated from this DMG by generate_appcast (release.yml, or script/release_fork.sh for this fork)."

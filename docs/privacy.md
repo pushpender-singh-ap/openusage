@@ -1,5 +1,8 @@
 # Privacy & Usage Data
 
+> **This fork's builds currently ship without an analytics key, so they send no daily ping, crash
+> reports, or usage analytics.** The rest of this page describes what is sent once a key is added.
+
 OpenUsage always sends an **anonymous daily active ping** and **anonymous crash reports** so we can
 count active users and fix app crashes. These are not optional.
 

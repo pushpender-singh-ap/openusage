@@ -106,7 +106,7 @@ struct HeaderView: View {
 
         Divider()
 
-        Link(destination: URL(string: "https://github.com/robinebers/openusage/issues/new/choose")!) {
+        Link(destination: URL(string: "https://github.com/pushpender-singh-ap/openusage/issues/new/choose")!) {
             Label("Report an Issue…", systemImage: "ladybug")
         }
 
