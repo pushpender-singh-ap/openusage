@@ -1,7 +1,8 @@
 import Foundation
 
-/// Finds a running Codeium-derived language server (Antigravity's bundled `language_server`, or the
-/// `agy` CLI) and returns the CSRF token + listening ports needed to call its local Connect-RPC service.
+/// Finds a running Codeium-derived language server (Antigravity's bundled `language_server`, the `agy`
+/// CLI, or that CLI hosted as an ACP agent) and returns the CSRF token + listening ports needed to call
+/// its local Connect-RPC service.
 ///
 /// This is a native Swift port of the Tauri host's `ls.discover`: scan `ps` for the process, match it by
 /// name + marker flags, pull `--csrf_token` / `--extension_server_port` from its argv, and read its
@@ -18,6 +19,8 @@ struct LanguageServerDiscovery: Sendable {
         var csrfFlag: String
         /// Optional flag carrying an HTTP fallback port (e.g. `--extension_server_port`).
         var portFlag: String?
+        /// First argument the command must pass after the executable (e.g. `acp`); nil accepts any.
+        var subcommand: String? = nil
     }
 
     struct Result: Sendable {
@@ -103,6 +106,7 @@ struct LanguageServerDiscovery: Sendable {
             let command = String(line[line.index(after: spaceIndex)...]).trimmingCharacters(in: .whitespaces)
             guard let pid = Int32(pidString),
                   commandMatchesProcess(command: command, processNameLower: processNameLower),
+                  options.subcommand.map({ firstArgument(command: command) == $0 }) ?? true,
                   let rank = markerRank(command: command, markersLower: markersLower)
             else { continue }
             ranked.append((rank, pid, command))
@@ -125,6 +129,12 @@ struct LanguageServerDiscovery: Sendable {
             }
         }
         return nil
+    }
+
+    /// The first argument after the executable (the `acp` in `…/antigravity acp --gemini-dir …`). Splits
+    /// on spaces like `extractFlag`, since `ps` doesn't quote an executable path.
+    static func firstArgument(command: String) -> String? {
+        command.split(whereSeparator: { $0 == " " || $0 == "\t" }).dropFirst().first.map(String.init)
     }
 
     /// Marker match priority: exact `--ide_name` / `--override_ide_name` / `--app_data_dir` value (rank 0,

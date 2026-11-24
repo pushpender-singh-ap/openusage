@@ -37,17 +37,41 @@ actor AntigravityDbUsageScanner {
     }
 
     static let defaultConversationsDirectories: @Sendable () throws -> [String] = {
-        try conversationsDirectories(underGeminiHome: geminiHome)
+        try ([geminiHome] + geminiHomes(underT3Root: t3GeminiHomesRoot)).flatMap {
+            try conversationsDirectories(underGeminiHome: $0)
+        }
     }
 
     static var geminiHome: String {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".gemini").path
     }
 
-    /// Each Antigravity surface keeps its own store under `~/.gemini/antigravity*/conversations`: the
-    /// `agy` CLI, the IDE, the Antigravity 2.0 app, and ACP-hosted sessions. Discovering them by name
-    /// means a new surface is picked up without a release.
-    /// A missing `~/.gemini` means Antigravity was never installed and yields no stores; any other
+    /// T3 Code runs Antigravity as an ACP agent with a Gemini home of its own per sign-in
+    /// (`antigravity acp --gemini-dir ~/.t3/userdata/providers/antigravity/<id>`), so those
+    /// conversations never reach `~/.gemini`.
+    static var t3GeminiHomesRoot: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".t3/userdata/providers/antigravity").path
+    }
+
+    /// The Gemini homes T3 Code created; each holds the same `antigravity*/conversations` layout as
+    /// `~/.gemini`. A missing root means T3 Code never ran Antigravity. Only directories count, so a
+    /// Finder `.DS_Store` can't fail the listing of every other store.
+    static func geminiHomes(underT3Root root: String) throws -> [String] {
+        try listDirectoryNames(at: root)
+            .sorted()
+            .map { root.trimmingTrailingSlashes + "/" + $0 }
+            .filter { path in
+                var isDirectory: ObjCBool = false
+                return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+            }
+    }
+
+    /// Each Antigravity surface keeps its own store under `<gemini home>/antigravity*/conversations`:
+    /// the `agy` CLI, the IDE, the Antigravity 2.0 app, and ACP-hosted sessions (T3 Code's under their
+    /// own homes, see `t3GeminiHomesRoot`). Discovering them by name means a new surface is picked up
+    /// without a release.
+    /// A missing home means Antigravity was never installed there and yields no stores; any other
     /// listing failure (a permission problem, an I/O error) is surfaced instead of read as "no usage".
     /// Every candidate store is returned, even one without a `conversations` child: the scan's
     /// listing treats a missing directory as empty and reports one it cannot read, whereas an

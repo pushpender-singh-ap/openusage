@@ -8,7 +8,8 @@ import Foundation
 /// Probe order, best source first:
 /// 1. Antigravity language server (running app) — richest, gives the authoritative plan.
 /// 2. `agy` language server (running CLI).
-/// 3. Keychain token → Google Cloud Code (works with the app closed); refreshes via Google OAuth.
+/// 3. The CLI hosted as an ACP agent (`antigravity acp …`, how T3 Code runs Antigravity).
+/// 4. Keychain token → Google Cloud Code (works with the app closed); refreshes via Google OAuth.
 ///
 /// On each source, `RetrieveUserQuotaSummary` is tried first (the only endpoint reporting the merged
 /// pools and the weekly windows); builds without it fall back to the legacy per-model endpoints,
@@ -138,18 +139,30 @@ final class AntigravityProvider: ProviderRuntime {
         if let result = await probeLS(processName: "agy", markers: [], csrfFlag: "", portFlag: nil) {
             return result
         }
+        // ACP hosts such as T3 Code run the CLI under its own `antigravity` name; it serves the same
+        // RPC without a CSRF token. The subcommand keeps the app's own processes from matching.
+        if let result = await probeLS(processName: "antigravity", markers: [], csrfFlag: "", portFlag: nil, subcommand: "acp") {
+            return result
+        }
         return try await probeCloudCode()
     }
 
     // MARK: - Language server
 
-    private func probeLS(processName: String, markers: [String], csrfFlag: String, portFlag: String?) async -> StrategyResult? {
+    private func probeLS(
+        processName: String,
+        markers: [String],
+        csrfFlag: String,
+        portFlag: String?,
+        subcommand: String? = nil
+    ) async -> StrategyResult? {
         let discovery = self.discovery
         let options = LanguageServerDiscovery.Options(
             processName: processName,
             markers: markers,
             csrfFlag: csrfFlag,
-            portFlag: portFlag
+            portFlag: portFlag,
+            subcommand: subcommand
         )
         guard let discovered = await loadOffMainActor({ discovery.discover(options) }) else { return nil }
 
@@ -290,12 +303,14 @@ final class AntigravityProvider: ProviderRuntime {
         // Authoritative first: the quota summary (merged pools + weekly windows). A parsed summary —
         // even one with zero usable buckets — is the answer and must never fall into the legacy chain
         // below, which fabricates "fully used" from missing quota info. A 404 (build without the RPC)
-        // reads as `.unavailable` and falls through. Both hosts are asked and their buckets merged by id,
-        // because one host can omit a whole pool.
+        // reads as `.unavailable` and falls through. The daily host is asked first (see
+        // `quotaSummaryURLs`); the other host only fills a pool the first one left out. Google returns
+        // the Gemini group only to a current Antigravity client, so the request carries its User-Agent.
         switch await usageClient.cloudCodeAllHosts(
             path: AntigravityUsageClient.quotaSummaryPath,
+            baseURLs: AntigravityUsageClient.quotaSummaryURLs,
             token: token,
-            userAgent: "antigravity",
+            userAgent: AntigravityUsageClient.clientUserAgent,
             body: [:],
             isComplete: AntigravityUsageMapper.isCompleteSummary
         ) {

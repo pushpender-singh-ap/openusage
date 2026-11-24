@@ -56,10 +56,10 @@ enum AntigravityUsageMapper {
         parseQuotaSummaries([data])
     }
 
-    /// Several `RetrieveUserQuotaSummary` bodies (one per Cloud Code host) merged by bucket id: the
-    /// first usable bucket for each id wins. One host can omit a whole pool (seen 2026-10-17: the daily
-    /// host returned only the Claude group), so no single body is trusted to be complete. Nil only when
-    /// no body is a summary; otherwise the same rules as `parseQuotaSummary` apply.
+    /// Several `RetrieveUserQuotaSummary` bodies (one per Cloud Code host, preferred host first) merged
+    /// by bucket id: the first usable bucket for each id wins. One host can omit a whole pool (seen
+    /// 2026-10-17: the daily host returned only the Claude group), so no single body is trusted to be
+    /// complete. Nil only when no body is a summary; otherwise the same rules as `parseQuotaSummary` apply.
     static func parseQuotaSummaries(_ bodies: [Data]) -> [MetricLine]? {
         let groupLists = bodies.compactMap { data -> [QuotaSummaryGroup]? in
             guard let groups = summaryGroups(data) else {

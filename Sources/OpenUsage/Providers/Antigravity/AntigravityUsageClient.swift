@@ -27,10 +27,17 @@ enum TokenRefreshOutcome: Sendable {
 /// Google Cloud Code endpoints, and the Google OAuth token refresh.
 struct AntigravityUsageClient: Sendable {
     static let lsService = "exa.language_server_pb.LanguageServerService"
-    // The daily endpoint can omit Gemini quotas from a successful response; prefer production.
+    /// Base URLs for the plan and legacy quota calls, production first.
     static let cloudCodeURLs = [
         "https://cloudcode-pa.googleapis.com",
         "https://daily-cloudcode-pa.googleapis.com"
+    ]
+    /// The quota summary is read from the daily host first: Antigravity's own language server reports
+    /// that host's numbers to the second, while production has answered with untouched windows (100%
+    /// left, resetting one full window from now) for an account that had hit its 5-hour limit.
+    static let quotaSummaryURLs = [
+        "https://daily-cloudcode-pa.googleapis.com",
+        "https://cloudcode-pa.googleapis.com"
     ]
     static let fetchModelsPath = "/v1internal:fetchAvailableModels"
     static let loadCodeAssistPath = "/v1internal:loadCodeAssist"
@@ -91,7 +98,9 @@ struct AntigravityUsageClient: Sendable {
     }
 
     /// The Antigravity client's own User-Agent shape (`%s/%s (aidev_client; os_type=…; arch=…)` in its
-    /// language server). Google marks other callers `UNSUPPORTED_CLIENT` and drops `paidTier`.
+    /// language server). Google marks other callers `UNSUPPORTED_CLIENT` and drops `paidTier`, and leaves
+    /// the Gemini group out of the quota summary for any caller below client version 2.10 (seen
+    /// 2026-11-24; 2.0 and a bare `antigravity` got only the Claude group).
     static let clientUserAgent: String = {
         #if arch(arm64)
         let arch = "arm64"
@@ -117,14 +126,15 @@ struct AntigravityUsageClient: Sendable {
         return .unavailable
     }
 
-    /// POST a Cloud Code endpoint on each base URL in order and return every 2xx body in base-URL order.
-    /// The hosts can disagree: `daily-cloudcode-pa` has answered the quota summary with only the Claude
-    /// group while `cloudcode-pa` also returned Gemini, so a caller merging by id may need both. Stops
-    /// after the first base when its 2xx body is one `isComplete` accepts: callers merge first-wins, so
-    /// a later answer couldn't change the result. Any 2xx wins; otherwise a 401/403 on any base is
-    /// `.authFailed`, and anything else `.unavailable`.
+    /// POST a Cloud Code endpoint on each of `baseURLs` in order and return every 2xx body in that order.
+    /// The hosts can disagree: one has answered the quota summary with only the Claude group while the
+    /// other also returned Gemini, so a caller merging by id may need both. Stops after the first base
+    /// when its 2xx body is one `isComplete` accepts: callers merge first-wins, so a later answer
+    /// couldn't change the result. Any 2xx wins; otherwise a 401/403 on any base is `.authFailed`, and
+    /// anything else `.unavailable`.
     func cloudCodeAllHosts(
         path: String,
+        baseURLs: [String],
         token: String,
         userAgent: String,
         body: [String: String],
@@ -132,7 +142,7 @@ struct AntigravityUsageClient: Sendable {
     ) async -> CloudCodeAllHostsOutcome {
         let payload = (try? JSONSerialization.data(withJSONObject: body)) ?? Data("{}".utf8)
         var responses: [HTTPResponse] = []
-        for (index, base) in Self.cloudCodeURLs.enumerated() {
+        for (index, base) in baseURLs.enumerated() {
             guard let url = URL(string: base + path) else { continue }
             let request = Self.cloudCodeRequest(url: url, token: token, userAgent: userAgent, payload: payload)
             guard let response = try? await http.send(request) else { continue }
