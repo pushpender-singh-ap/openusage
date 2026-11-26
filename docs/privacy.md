@@ -76,7 +76,7 @@ analytics toggle controls extra PostHog events, not daily activity or crash repo
 
 - Data is fully anonymous: OpenUsage never identifies you to the analytics service and creates no user profile.
 - Daily activity and crash reports are always enabled, regardless of the extra-analytics switch.
-- Counts are rolled up locally and sent as daily summaries, so the app's normal 5-minute refresh never turns into a flood of network calls.
+- Counts are rolled up locally and sent as daily summaries regardless of each provider's refresh interval.
 - Your analytics choice and the anonymous ID are stored separately from the rest of the app's settings, so settings migrations and updates do not re-enable extra analytics or change your ID.
 
 ## Turning extra analytics off

@@ -11,16 +11,17 @@ import UserNotifications
 /// System Settings. The footer already shows the version; the release build adds an "Updates" section
 /// (auto-check, beta channel, and a full-width manual check button).
 struct SettingsScreen: View {
-    @Environment(AppContainer.self) private var container
+    @Environment(AppContainer.self) var container
     @Environment(LayoutStore.self) private var layout
     @Environment(UpdaterController.self) private var updater
 
     @State private var launchAtLogin = LaunchAtLoginSetting()
     @State private var commandLineTool = CommandLineToolInstaller()
+    @State var refreshProvider = "claude"
     @AppStorage(TotalSpendSetting.key) private var showTotalSpend = true
     @AppStorage(AppearanceSetting.key) private var appearance = AppearanceSetting.system
     @AppStorage(TimeFormatSetting.key) private var timeFormat = TimeFormatSetting.auto
-    @AppStorage(DensitySetting.key) private var density = DensitySetting.regular
+    @AppStorage(DensitySetting.key) var density = DensitySetting.regular
     @AppStorage(ReduceAnimationsSetting.key) private var reduceAnimations = ReduceAnimationsSetting.fallback
     @AppStorage(LogLevelSetting.key) private var logLevel = LogLevelSetting.fallback
     /// Surfaced under the Advanced rows when copying the path or revealing the file fails.
@@ -54,6 +55,7 @@ struct SettingsScreen: View {
         // Same section rhythm as the dashboard and Customize (all read the density setting).
         VStack(alignment: .leading, spacing: density.sectionSpacing) {
             generalSection
+            automaticRefreshSection
             ICloudSyncSettingsSection(sync: container.iCloudSync)
             appearanceSection
             usageDisplaySection
@@ -468,67 +470,5 @@ struct SettingsScreen: View {
         .controlSize(.regular)
         .padding(.horizontal, 12)
         .padding(.vertical, density.controlRowPadding)
-    }
-
-    // MARK: - Section / row scaffolding
-
-    /// A caption header over a rounded card of rows — the Customize block shape. The header is
-    /// inset 8pt so it aligns with the rows' content, matching how Customize lines its provider
-    /// headers up with the card rows.
-    private func section(
-        _ title: String,
-        @ViewBuilder rows: () -> some View
-    ) -> some View {
-        VStack(alignment: .leading, spacing: density.headerToCardSpacing) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 8)
-            VStack(spacing: 0) {
-                rows()
-            }
-            .cardSurface()
-        }
-    }
-
-    /// One settings row: label on the leading edge, the control on the trailing edge. Same insets
-    /// as a Customize metric row so the cards share one rhythm.
-    private func row(_ label: String, @ViewBuilder control: () -> some View) -> some View {
-        HStack(spacing: 10) {
-            Text(label)
-            Spacer(minLength: 8)
-            control()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, density.controlRowPadding)
-    }
-
-    /// An inline orange caption under a row — the single definition of the notice idiom shared by the
-    /// General/Advanced error lines and the "this setting is paused" captions (Increase Transparency
-    /// paused by a system accessibility setting, or by Party mode taking over the look).
-    private func inlineNotice(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(Theme.notice)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// A trailing popup picker that hugs its selection — segmented controls don't fit the 320pt
-    /// popover once options have real words in them.
-    private func picker<Value: Hashable>(
-        _ selection: Binding<Value>,
-        options: [Value],
-        label: @escaping (Value) -> String
-    ) -> some View {
-        Picker("", selection: selection) {
-            ForEach(options, id: \.self) { option in
-                Text(label(option)).tag(option)
-            }
-        }
-        .pickerStyle(.menu)
-        .labelsHidden()
-        .fixedSize()
     }
 }

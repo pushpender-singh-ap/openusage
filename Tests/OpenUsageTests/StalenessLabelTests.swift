@@ -11,7 +11,7 @@ final class StalenessLabelTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     func testFreshSnapshotsAndFutureClockSkewHaveNoStalenessLabel() {
-        for offset in [0, -RefreshSetting.interval, -(WidgetDataStore.stalenessThreshold - 1), 3_600] {
+        for offset: TimeInterval in [0, -300, -599, 3_600] {
             let store = makeStore()
             store.snapshots["devin"] = snapshot(refreshedAt: now.addingTimeInterval(offset))
             XCTAssertNil(store.stalenessHint(for: "devin"), "offset: \(offset)")
@@ -26,9 +26,9 @@ final class StalenessLabelTests: XCTestCase {
     }
 
     func testSnapshotExactlyAtThresholdIsStale() {
-        // Pins the `>=` boundary: exactly `stalenessThreshold` old must already count as stale.
+        // Pins the `>=` boundary: exactly two intervals old must already count as stale.
         let store = makeStore()
-        store.snapshots["devin"] = snapshot(refreshedAt: now.addingTimeInterval(-WidgetDataStore.stalenessThreshold))
+        store.snapshots["devin"] = snapshot(refreshedAt: now.addingTimeInterval(-600))
         XCTAssertNotNil(store.stalenessHint(for: "devin"))
     }
 

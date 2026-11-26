@@ -690,18 +690,19 @@ final class ClaudeProviderTests: XCTestCase {
 
     func testRateLimitedResponseMapsToRetryBadgeNotError() async {
         let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
+        let clock = TestClock(now)
         let httpClient = FakeHTTPClient(response: HTTPResponse(
             statusCode: 429,
-            headers: ["retry-after": "600"],
+            headers: ["retry-after": "2100"],
             body: Data()
         ))
         let provider = ClaudeProvider(
             authStore: configuredAuthStore(files: FakeFiles([
                 "/tmp/claude/.credentials.json": #"{"claudeAiOauth":{"accessToken":"token","subscriptionType":"pro","scopes":["user:profile"]}}"#
-            ]), now: { now }),
+            ]), now: { clock.now }),
             usageClient: ClaudeUsageClient(httpClient: httpClient),
             logUsageScanner: ClaudeLogFixture.scanner(home: nil),
-            now: { now },
+            now: { clock.now },
             pricing: { TestPricing.bundled }
         )
 
@@ -713,8 +714,11 @@ final class ClaudeProviderTests: XCTestCase {
         // provider header warning (amber triangle) — without it the default dashboard is silently blank.
         XCTAssertEqual(
             snapshot.warning,
-            "Updates blocked by Anthropic. Be patient — manual refreshes will make it worse. Retrying in ~10m."
+            "Updates blocked by Anthropic. Be patient — manual refreshes will make it worse. Retrying in ~35m."
         )
+        clock.set(now.addingTimeInterval(10 * 60))
+        _ = await provider.refresh()
+        XCTAssertEqual(httpClient.requests.filter { $0.isClaudeUsagePoll }.count, 1)
     }
 
     func testRateLimitServesLastGoodUsageThenBacksOff() async {
@@ -735,7 +739,7 @@ final class ClaudeProviderTests: XCTestCase {
                     body: Data(#"{"five_hour":{"utilization":25,"resets_at":"2099-01-01T00:00:00.000Z"}}"#.utf8)
                 )
             }
-            return HTTPResponse(statusCode: 429, headers: ["retry-after": "600"], body: Data())
+            return HTTPResponse(statusCode: 429, headers: [:], body: Data())
         }
         let provider = ClaudeProvider(
             authStore: configuredAuthStore(files: FakeFiles([
@@ -762,11 +766,15 @@ final class ClaudeProviderTests: XCTestCase {
 
         // 3) Within the cooldown the live call is skipped entirely; the cached bar is still shown and the
         // warning persists.
-        clock.set(t0.addingTimeInterval(60))
+        clock.set(t0.addingTimeInterval(599))
         let third = await provider.refresh()
         XCTAssertEqual(Self.progress(third.lines, "Session")?.used, 25)
         XCTAssertEqual(third.warning?.hasPrefix("Updates blocked by Anthropic"), true)
         XCTAssertEqual(httpClient.requests.filter { $0.isClaudeUsagePoll }.count, 2)
+
+        clock.set(t0.addingTimeInterval(600))
+        _ = await provider.refresh()
+        XCTAssertEqual(httpClient.requests.filter { $0.isClaudeUsagePoll }.count, 3)
     }
 
     func testRefreshSurfacesRequestFailureForNonOAuthRefreshErrorBody() async {

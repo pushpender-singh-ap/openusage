@@ -15,7 +15,7 @@ final class RefreshWakeSignalTests: XCTestCase {
         // suspended in a wait yet). The signal must buffer it and return immediately — a regression
         // here would sleep out the full (long) timeout and trip the elapsed assertion.
         let center = NotificationCenter()
-        let signal = RefreshWakeSignal(name: wakeName, center: center)
+        let signal = RefreshWakeSignal(names: [wakeName], center: center)
 
         center.post(name: wakeName, object: nil)
 
@@ -29,7 +29,7 @@ final class RefreshWakeSignalTests: XCTestCase {
 
     func testWakeWhileWaitingResumesBeforeTimeout() async {
         let center = NotificationCenter()
-        let signal = RefreshWakeSignal(name: wakeName, center: center)
+        let signal = RefreshWakeSignal(names: [wakeName], center: center)
 
         let start = Date()
         let wait = Task { await signal.waitForWake(timeout: 60) }
@@ -43,7 +43,7 @@ final class RefreshWakeSignalTests: XCTestCase {
 
     func testNoWakeFallsBackToTimeout() async {
         let center = NotificationCenter()
-        let signal = RefreshWakeSignal(name: wakeName, center: center)
+        let signal = RefreshWakeSignal(names: [wakeName], center: center)
 
         let start = Date()
         await signal.waitForWake(timeout: 0.1)
@@ -51,9 +51,18 @@ final class RefreshWakeSignalTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 0.09)
     }
 
+    func testIntervalChangeDuringPassWakesTheDefaultSignal() async {
+        let center = NotificationCenter()
+        let signal = RefreshWakeSignal(center: center)
+        center.post(name: RefreshSetting.didChangeNotification, object: nil)
+        let start = Date()
+        await signal.waitForWake(timeout: 10)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+    }
+
     func testWakeBurstCoalescesIntoASingleWake() async {
         let center = NotificationCenter()
-        let signal = RefreshWakeSignal(name: wakeName, center: center)
+        let signal = RefreshWakeSignal(names: [wakeName], center: center)
 
         for _ in 0..<3 {
             center.post(name: wakeName, object: nil)

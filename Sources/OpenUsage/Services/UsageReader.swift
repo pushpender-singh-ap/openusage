@@ -80,6 +80,7 @@ public struct UsageReader {
             matchedIDs?.contains(id) ?? enablement.isEnabled(id)
         }
         let cache = ProviderSnapshotCache(userDefaults: defaults, allowsPersistedFreshness: true)
+        let refreshSetting = RefreshSetting(defaults: defaults)
         let allProviderIDs = registry.providers.map(\.id)
         // The same account guard the app applies at launch: an entry that provably belongs to another
         // account (swap since it was written) is never served, and its provider counts as needing a
@@ -96,7 +97,7 @@ public struct UsageReader {
         let orderedIDs = registry.orderedProviderIDs(savedOrder: savedOrder)
         let enabledOrderedIDs = orderedIDs.filter(includesProvider)
         let needsRefresh = force || enabledOrderedIDs.contains {
-            cache.snapshot(providerID: $0) == nil || staleAccountStampIDs.contains($0)
+            cache.snapshot(providerID: $0, refreshSetting: refreshSetting) == nil || staleAccountStampIDs.contains($0)
         }
         var snapshots = cachedSnapshots
         var warnings: [String] = []
@@ -135,7 +136,8 @@ public struct UsageReader {
             knownIDs: knownIDs,
             snapshots: snapshots,
             limitDescriptors: registry.limitDescriptorsByProvider,
-            errors: errors
+            errors: errors,
+            refreshSetting: refreshSetting
         )
         let path = requestedToken.map { "/v1/limits/\($0)" } ?? "/v1/limits"
         let response = LocalUsageAPI.respond(method: "GET", path: path, state: state)

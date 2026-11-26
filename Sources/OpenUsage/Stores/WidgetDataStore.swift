@@ -12,21 +12,21 @@ struct StalenessHint: Equatable {
 @MainActor
 @Observable
 final class WidgetDataStore {
-    private let registry: WidgetRegistry
+    let registry: WidgetRegistry
     private let providersByID: [String: ProviderRuntime]
     private let cache: ProviderSnapshotCache
     private let defaults: UserDefaults
     /// Whether a provider is currently enabled. Injected so the store consults the single
     /// `ProviderEnablementStore` without owning it; defaults to "all enabled" for tests and previews.
-    private let isProviderEnabled: @MainActor (String) -> Bool
+    let isProviderEnabled: @MainActor (String) -> Bool
     /// The user's widget order (already enablement-filtered) that drives the menu-bar value. Injected
     /// so the store reads `LayoutStore.visiblePlaced` without owning it; defaults to registry order.
     private let orderedDescriptors: @MainActor () -> [WidgetDescriptor]
-    /// Clock for the failure-backoff window. Injected so tests can advance time deterministically.
-    private let now: () -> Date
+    /// Wall clock for refresh deadlines, failure backoff, and snapshot age.
+    let now: () -> Date
     /// Monotonic clock for refresh durations, kept separate from wall time so a clock adjustment cannot
     /// produce a negative or wildly inflated provider timing. Tests inject exact ticks.
-    private let monotonicNow: () -> TimeInterval
+    let monotonicNow: () -> TimeInterval
     private let slowProviderRefreshThreshold: TimeInterval
     /// See `defaultProviderRefreshTimeout`. Injected so tests can drive the deadline in milliseconds.
     private let providerRefreshTimeout: TimeInterval
@@ -52,7 +52,7 @@ final class WidgetDataStore {
     /// nothing else stops the loop from re-probing a broken provider (logged-out Devin/Grok especially)
     /// on every wake, spawning subprocesses and network calls in a tight loop. This negative-cache caps a
     /// failing provider to one probe per window. Shorter than the refresh interval, so the normal
-    /// 5-minute heartbeat always retries; it only suppresses the sub-interval re-probes a wake burst
+    /// scheduled check always retries; it only suppresses the sub-interval re-probes a wake burst
     /// would cause. The manual `force` refresh (⌘R) always bypasses it.
     private static let failureRetryBackoff: TimeInterval = 60
     static let defaultSlowProviderRefreshThreshold: TimeInterval = 10
@@ -75,10 +75,15 @@ final class WidgetDataStore {
     /// peer contribution can never echo back out and multiply on the next device.
     private(set) var localSnapshots: [String: ProviderSnapshot] = [:]
     var refreshingProviderIDs: Set<String> = []
-    /// Wall-clock time the most recent full refresh pass finished. Together with the chosen refresh
-    /// cadence it drives the dashboard footer's live "Next update in …" countdown, so the footer reflects
-    /// the real schedule instead of a hardcoded value. `nil` until the first pass completes.
-    var lastRefreshAt: Date?
+    var refreshSetting: RefreshSetting {
+        didSet {
+            guard refreshSetting != oldValue else { return }
+            refreshSetting.save(to: defaults)
+            NotificationCenter.default.post(name: RefreshSetting.didChangeNotification, object: nil)
+        }
+    }
+    /// Includes failed attempts, which have no fresh snapshot to gate the next automatic check.
+    var lastCheckedAt: [String: Date] = [:]
     /// Latest refresh error per provider (e.g. "Not logged in. Run `codex` to authenticate."). Set when
     /// a refresh comes back as an error snapshot, cleared on the next successful one. The dashboard
     /// renders it as a warning indicator beside the provider name; the last good snapshot keeps
@@ -94,16 +99,16 @@ final class WidgetDataStore {
     @ObservationIgnored private let notificationEvaluator = QuotaNotificationEvaluator()
 
     /// Telemetry hook wired by `AppContainer`. Invoked once per *real* provider fetch — `.refreshed` or
-    /// `.failed` only, never the cache-hit/skip/backoff outcomes that the 5-minute timer produces in
+    /// `.failed` only, never the cache-hit/skip/backoff outcomes that the timer produces in
     /// bulk — so the recorder can roll daily usage and error counts up into one event per provider per
     /// day. `nil` (and so a no-op) in tests and previews. Not observable UI state.
     @ObservationIgnored var onRefreshOutcome: (@MainActor (String, RefreshOutcome, ErrorCategory?, Bool) -> Void)?
     /// Wired by `ICloudUsageSyncStore`; debounced there so a concurrent provider batch produces one file.
     @ObservationIgnored var onLocalHistoryChanged: (@MainActor () -> Void)?
     @ObservationIgnored private var peerHistoryDocuments: [UsageHistoryDocument] = []
-    @ObservationIgnored private var snapshotRebuildDeferrals = 0
+    @ObservationIgnored var snapshotRebuildDeferrals = 0
     @ObservationIgnored private var pendingSnapshotRebuild = false
-    @ObservationIgnored private var coalescedRebuildTask: Task<Void, Never>?
+    @ObservationIgnored var coalescedRebuildTask: Task<Void, Never>?
 
     /// Global meter style: whether every bounded tile (and the menu-bar value) renders as "used" or
     /// "left/remaining". Persisted so the choice survives relaunch; defaults to `.remaining`.
@@ -154,6 +159,7 @@ final class WidgetDataStore {
         self.providersByID = Dictionary(uniqueKeysWithValues: providers.map { ($0.provider.id, $0) })
         self.cache = cache
         self.defaults = defaults
+        self.refreshSetting = RefreshSetting(defaults: defaults)
         self.isProviderEnabled = isProviderEnabled
         self.orderedDescriptors = orderedDescriptors ?? { registry.descriptors }
         self.now = now
@@ -198,59 +204,8 @@ final class WidgetDataStore {
         }
     }
 
-    /// Refresh every enabled provider, concurrently — one slow provider never delays the rest.
-    /// Everything stays MainActor-isolated; the overlap happens at the network awaits inside each
-    /// provider, and the per-provider in-flight guard in `refresh` still prevents duplicate fetches.
-    /// `force` bypasses the snapshot cache (the manual "refresh now" path); the periodic loop keeps
-    /// honoring it.
-    func refreshAll(force: Bool = false) async {
-        // `Task {}` from MainActor context inherits the isolation (a task-group child can't capture
-        // the non-Sendable store), so: fire one task per provider, then await them all.
-        let providerIDs = registry.providers.map(\.id).filter { isProviderEnabled($0) }
-        let start = monotonicNow()
-        AppLog.info(.refresh, "batch start (\(providerIDs.count) providers, force=\(force))")
-        snapshotRebuildDeferrals += 1
-        let tasks = providerIDs.map { providerID in
-            Task { await self.refresh(providerID: providerID, force: force, notifyHistoryChange: false) }
-        }
-        var outcomes: [RefreshOutcome] = []
-        outcomes.reserveCapacity(tasks.count)
-        for task in tasks {
-            outcomes.append(await task.value)
-        }
-        snapshotRebuildDeferrals -= 1
-        if snapshotRebuildDeferrals == 0 {
-            coalescedRebuildTask?.cancel()
-            coalescedRebuildTask = nil
-            flushPendingSnapshotWork()
-        }
-        // Stamp the end of the pass so the footer countdown targets the next scheduled refresh
-        // (this time + one refresh interval), mirroring the periodic loop that sleeps one interval
-        // after each pass.
-        lastRefreshAt = Date()
-        let durationMs = durationMilliseconds(since: start)
-        // Count THIS batch's actual outcomes, not the long-lived `providerErrors` map (which persists
-        // across passes, so reading it would miscount cache hits and stale earlier failures).
-        let refreshed = outcomes.count { $0 == .refreshed }
-        let failed = outcomes.count { $0 == .failed }
-        let cached = outcomes.count { $0 == .cacheHit }
-        let backedOff = outcomes.count { $0 == .backedOff }
-        if refreshed > 0 { onLocalHistoryChanged?() }
-        AppLog.info(.refresh, "batch end (\(durationMs)ms, \(refreshed) ok / \(failed) failed / \(cached) cached / \(backedOff) backed off)")
-    }
-
-    /// The user's own Refresh. It's the only refresh that lets a login they denied ask again.
-    func refreshOnUserRequest(providerID: String? = nil) async {
-        KeychainAccessGuard.forgetDenials()
-        if let providerID {
-            await refresh(providerID: providerID, force: true)
-        } else {
-            await refreshAll(force: true)
-        }
-    }
-
     /// Evaluate every visible, enabled metric for a quota pace milestone and post a notification for any
-    /// that just crossed one. Driven from the periodic loop *after* `refreshAll`, so it catches pace
+    /// that just crossed one. Driven from the periodic loop after checking due providers, so it catches pace
     /// worsening from time passing (not only from a fresh fetch). Deduped per metric per reset window by
     /// the evaluator's per-key state. No-data metrics never fire; bounded level-only metrics can fire
     /// Almost Out, but not pace-based milestones. A no-op when notifications are unconfigured
@@ -308,13 +263,16 @@ final class WidgetDataStore {
             providerID: providerID,
             currentIdentityKey: providerIdentityKeys[providerID]
         )
-        if !force, !staleAccountStamp, let cached = cache.snapshot(providerID: providerID) {
+        if !force, !staleAccountStamp, let cached = cache.snapshot(providerID: providerID, refreshSetting: refreshSetting) {
             // Skip the no-op write: `@Observable` doesn't compare values, so unconditionally
             // re-assigning an unchanged snapshot would re-render the menu-bar label every pass.
             AppLog.debug(.refresh, "cache hit \(providerID)")
             if localSnapshots[providerID] != cached {
                 localSnapshots[providerID] = cached
                 requestSnapshotRebuild()
+            }
+            if cached.refreshedAt > (lastCheckedAt[providerID] ?? .distantPast) {
+                lastCheckedAt[providerID] = cached.refreshedAt
             }
             return .cacheHit
         }
@@ -335,7 +293,10 @@ final class WidgetDataStore {
             return .skipped
         }
         refreshingProviderIDs.insert(providerID)
-        defer { refreshingProviderIDs.remove(providerID) }
+        defer {
+            refreshingProviderIDs.remove(providerID)
+            if !Task.isCancelled { lastCheckedAt[providerID] = now() }
+        }
         let start = monotonicNow()
         // A provider that never returns would otherwise hold the in-flight entry — and the spinner —
         // forever. Past the deadline, stop waiting and treat it as any other failed refresh.
@@ -411,16 +372,14 @@ final class WidgetDataStore {
         return .refreshed
     }
 
-    private func durationMilliseconds(since start: TimeInterval) -> Int {
+    func durationMilliseconds(since start: TimeInterval) -> Int {
         max(0, Int((monotonicNow() - start) * 1000))
     }
 
-    /// Clears a provider's failure backoff so the next pass probes it immediately. Called when the user
-    /// re-enables a provider: the enablement wake exists to fetch promptly, so a stale backoff from a
-    /// failure just before it was turned off must not suppress that fetch (the loop wouldn't otherwise
-    /// retry until the 5-minute heartbeat). The periodic loop never calls this — only the user action does.
+    /// Re-enabling a failed provider lets it retry promptly. Claude keeps its automatic deadline.
     func clearFailureBackoff(for providerID: String) {
-        failureRetryAfter[providerID] = nil
+        guard failureRetryAfter.removeValue(forKey: providerID) != nil else { return }
+        if ProviderAccountID.family(of: providerID) != "claude" { lastCheckedAt[providerID] = nil }
     }
 
     /// Rebuild the in-memory union immediately after a provider toggle. Local cached data remains
@@ -561,161 +520,10 @@ final class WidgetDataStore {
         snapshots = rendered
     }
 
-    /// The provider's latest refresh error, or `nil` when its last refresh succeeded.
-    func errorMessage(for providerID: String) -> String? {
-        providerErrors[providerID]
-    }
-
-    /// A soft, non-blocking notice from the provider's latest *successful* snapshot (e.g. Claude's
-    /// "Re-login for live usage" when the login lacks the `user:profile` scope). `nil` when there's no
-    /// warning. After a *failed* refresh the store keeps the last good snapshot (so this warning can
-    /// linger) while setting `providerErrors` — use `headerNotice(for:)` for the rendered triangle so a
-    /// current hard error isn't masked by a stale soft warning.
-    func warningMessage(for providerID: String) -> String? {
-        snapshots[providerID]?.warning
-    }
-
-    /// The provider header's amber-triangle notice: a hard refresh error takes precedence over a stale
-    /// soft warning from the last successful snapshot. After a failed refresh the store keeps the last
-    /// good snapshot (so `warningMessage` still returns its warning) while `errorMessage` holds the
-    /// current failure — the error must win, or a stale "Re-login for live usage" warning would hide a
-    /// real "Token expired" failure. When there's no error, the soft warning (if any) shows.
-    func headerNotice(for providerID: String) -> String? {
-        errorMessage(for: providerID) ?? warningMessage(for: providerID)
-    }
-
     /// A snapshot that carries only error lines is a failed refresh; its message comes from the badge.
     private static func errorMessage(in snapshot: ProviderSnapshot) -> String? {
         guard !snapshot.lines.isEmpty, snapshot.lines.allSatisfy(\.isError) else { return nil }
         if case .badge(_, let text, _, _) = snapshot.lines[0] { return text }
         return "Refresh failed"
     }
-
-    func data(for descriptor: WidgetDescriptor) -> WidgetData {
-        var result: WidgetData
-        if let snapshot = snapshots[descriptor.providerID],
-           let line = snapshot.line(label: descriptor.metricLabel),
-           let data = resolve(line, descriptor: descriptor) {
-            result = data
-        } else {
-            // No real metric line backs this placed tile, so the sample's numbers are placeholders.
-            // Flag it as no-data; the tile renders "No data" instead of inventing usage.
-            result = descriptor.sample
-            result.hasData = false
-        }
-
-        // Single global choke point: dashboard/share rows and menu-bar values all funnel through here,
-        // so stamping the mode once makes them follow the global setting. Inert for unbounded rows
-        // (limit == nil), whose displayed value ignores displayMode.
-        result.displayMode = meterStyle
-        result.resetDisplayMode = resetDisplayMode
-        result.alwaysShowPacing = alwaysShowPacing
-        return result
-    }
-
-    /// The plan label for a provider's latest snapshot. `nil` until a snapshot exists or when the
-    /// provider doesn't expose a plan. Provider section headers render this beside the provider name.
-    func plan(for providerID: String) -> String? {
-        snapshots[providerID]?.plan
-    }
-
-    /// How long a displayed snapshot may age before the header calls it out. A healthy provider's
-    /// snapshot resets to ~0 on every successful pass and only brushes one interval just before the next
-    /// one, so the threshold sits at two intervals: it fires only when a refresh has actually been missed
-    /// — a refresh loop that keeps failing, or a long-suspended background timer — never on the normal
-    /// per-cycle aging, which would flicker a hint on healthy providers.
-    static let stalenessThreshold = RefreshSetting.interval * 2
-
-    /// A compact "Outdated" hint for the provider's on-screen snapshot, surfaced only once that snapshot
-    /// has aged past `stalenessThreshold`; `nil` while the data is still current (the common case), so the
-    /// header stays clean until staleness is real. The label is short on purpose — a long plan name plus a
-    /// full "Updated 3h ago" string would overflow the header — so the precise age rides in the tooltip.
-    /// This is the visible counterpart to the silent fossilized-cache problem (#582): a failing-refresh
-    /// loop keeps the last good plan/limits on screen, and without this nothing told the user that data was
-    /// stale. Reads the store's injected clock, which tests pin to a fixed value.
-    func stalenessHint(for providerID: String) -> StalenessHint? {
-        guard let refreshedAt = snapshots[providerID]?.refreshedAt else { return nil }
-        let age = now().timeIntervalSince(refreshedAt)
-        guard age >= Self.stalenessThreshold, let duration = Formatters.compactDuration(age) else {
-            return nil
-        }
-        return StalenessHint(label: "Outdated", tooltip: "Last updated \(duration) ago")
-    }
-
-    private func resolve(_ line: MetricLine, descriptor: WidgetDescriptor) -> WidgetData? {
-        switch line {
-        case .progress(_, let used, let limit, let format, let resetsAt, let periodDurationMs, _):
-            // A percent meter is a bounded 0...100 domain; sanitize an out-of-range sample (a provider
-            // reporting a negative or >100 utilization) here, at the single construction choke point
-            // every provider funnels through, so no surface — headline, flip tooltip, menu bar — can
-            // render "-5%" or "105%". For percent the limit is always 100, so clamping `used` also
-            // keeps the meter's spent verdict intact (>=100 still reads "Limit reached"). Non-percent
-            // meters keep their raw `used`: a dollar/count overage (used > limit) is real and is
-            // conveyed by the meter's spent state rather than hidden.
-            let normalizedUsed = format == .percent ? ProviderParse.clampPercent(used) : used
-            var result = WidgetData(
-                title: descriptor.sample.title,
-                icon: descriptor.sample.icon,
-                kind: format.metricKind,
-                used: normalizedUsed,
-                limit: limit,
-                countSuffix: format.countSuffix,
-                valuePrefix: descriptor.sample.valuePrefix,
-                resetsAt: resetsAt,
-                periodDurationMs: periodDurationMs,
-                limitNoun: descriptor.sample.limitNoun,
-                infoNote: descriptor.sample.infoNote
-            )
-            // Descriptor opt-in (session-window meters read "Not started" when unused); the fresh
-            // `.progress` result doesn't start from the sample, so carry the signal explicitly.
-            result.sessionStartSignal = descriptor.sample.sessionStartSignal
-            return result
-        case .text:
-            // Text lines carry provider notices for the local API; no dashboard descriptor consumes
-            // them. Numeric widgets use typed progress/values lines and must never parse display text.
-            return nil
-        case .values(_, let values, _, let expiriesAt, let unknownModels, let modelBreakdown):
-            // The number is carried raw — no regex re-parse. Presentation (title, icon, selection,
-            // trailing word) comes from the descriptor's sample; the live numbers come from the line.
-            var data = descriptor.sample
-            data.values = values
-            // A `.values` line is unbounded by definition (see `MetricLine`), so it never renders as a
-            // meter even when the descriptor template carries a placeholder limit — e.g. Claude's
-            // `claude.extra` is `boundedDollars` for its capped `.progress` case but feeds an uncapped
-            // `.values` row when there's no monthly cap.
-            data.limit = nil
-            // Optional expiry instants (Codex rate-limit-reset credits): surfaced in the row's hover
-            // tooltip (see `expiryTooltip`), with the row re-rendering on the clock tick so they stay live.
-            data.expiriesAt = expiriesAt
-            // Unknown-model names (Cursor spend tiles): drive the label warning triangle whose hover lists
-            // the models this period used that the pricing manifest can't price, so the cost is incomplete.
-            data.unknownModels = unknownModels
-            data.modelBreakdown = modelBreakdown
-            // A tile whose selection finds no value (e.g. a cost-only tile on a day the scanner couldn't
-            // price) has nothing real to show — render "No data" rather than a misleading $0.00 / 0.
-            data.hasData = !data.selectedValues.isEmpty
-            // The ⓘ is data-driven: it shows when a *shown* value is locally estimated (a spend row's
-            // dollars) and stays off for a measured one (its tokens), so the tokens-only tile reads clean.
-            data.infoNote = data.selectedValues.contains(where: \.estimated)
-                ? (descriptor.sample.valueTooltipNote ?? WidgetData.localEstimateNote)
-                : descriptor.sample.infoNote
-            return data
-        case .badge(_, let text, _, let subtitle):
-            var data = descriptor.sample
-            data.valueTextOverride = text
-            data.subtitleOverride = subtitle
-            return data
-        case .chart(_, let points, let note):
-            // Presentation (title, icon) from the sample; the live per-day points from the line. No
-            // points means the source was read but had no usable day — render "No data", not an empty
-            // axis (and so descriptor template data never leaks onto the dashboard).
-            var data = descriptor.sample
-            data.isChart = true
-            data.chartPoints = points
-            data.chartNote = note
-            data.hasData = !points.isEmpty
-            return data
-        }
-    }
-
 }

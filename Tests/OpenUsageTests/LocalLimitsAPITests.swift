@@ -69,7 +69,7 @@ final class LocalLimitsAPITests: XCTestCase {
         XCTAssertNil(sessionJSON["label"])
 
         var expiredState = state
-        expiredState.generatedAt = fetchedAt.addingTimeInterval(RefreshSetting.interval)
+        expiredState.generatedAt = fetchedAt.addingTimeInterval(5 * 60)
         let expiredRoot = try json(LocalUsageAPI.respond(method: "GET", path: "/v1/limits", state: expiredState).body)
         let expiredProviders = try XCTUnwrap(expiredRoot["providers"] as? [String: Any])
         let expiredProvider = try XCTUnwrap(expiredProviders["codex"] as? [String: Any])

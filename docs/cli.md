@@ -12,8 +12,9 @@ openusage codex --force   # refresh through the shared provider engine, cache, p
 ```
 
 The command and app import the same providers, authentication stores, pricing, refresh coordinator, and
-snapshot cache. A normal read reuses snapshots less than five minutes old and refreshes missing or stale
-ones. `--force` is the CLI equivalent of the app's manual refresh: it bypasses that freshness gate and
+snapshot cache. A normal read reuses snapshots younger than the interval set for that provider in
+**Settings → Automatic Refresh** (10 minutes for Claude and 5 minutes for others by default). It
+refreshes any missing or stale entries. `--force` skips this freshness check like a manual refresh and
 writes successful results to the same cache. Credentials are used locally and never appear in the output.
 
 A provider argument names providers by plain string matching, exactly like the

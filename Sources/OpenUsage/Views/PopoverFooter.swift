@@ -97,8 +97,8 @@ struct PopoverFooter: View {
 
     private func updateStatusText(now: Date) -> String {
         if isUpdating { return "Updating…" }
-        let base = dataStore.lastRefreshAt ?? now
-        let remaining = max(0, base.addingTimeInterval(RefreshSetting.interval).timeIntervalSince(now))
+        guard let next = dataStore.nextAutomaticRefreshAt else { return "No providers enabled" }
+        let remaining = max(0, next.timeIntervalSince(now))
         let totalSeconds = Int(remaining.rounded(.up))
         if totalSeconds >= 60 {
             let minutes = Int((Double(totalSeconds) / 60).rounded(.up))

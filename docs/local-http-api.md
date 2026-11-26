@@ -92,8 +92,8 @@ Methods other than `GET`/`OPTIONS` return **405**; unknown routes return **404**
 `kind` is `consumption` (`used`) or `balance` (`available`). Bounded consumption also carries `limit`,
 `remaining`, and a 0–1 `utilization`. Reset, window, expiry-list, and `estimated` fields appear only when
 the provider supplies that meaning. A provider or resource with no current value is omitted rather than
-invented as zero. `expiresAt` is always `fetchedAt` plus the same five-minute freshness interval used by
-the app and CLI; `stale` says whether that instant has passed. Refresh failures appear in `errors` as
+invented as zero. `expiresAt` is `fetchedAt` plus the provider's current refresh interval (10 minutes
+for Claude and 5 minutes for others by default). `stale` becomes true at that instant. Refresh failures appear in `errors` as
 `{"providerId":"…","message":"…"}` while a last-good provider snapshot remains available.
 For bounded progress resources, `unit` follows the provider's live metric format. For example, Cursor
 `totalUsage` is `percent` on percentage-based plans, `requests` on request-based Enterprise plans, and

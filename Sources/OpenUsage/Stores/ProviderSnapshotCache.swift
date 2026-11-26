@@ -33,7 +33,7 @@ struct ProviderSnapshotCache {
     /// periodic loop refetches on schedule. A snapshot loaded from a *previous* session (off disk) is never
     /// fresh regardless of its `refreshedAt` — see `sessionWrites`. Tests inject a fixed TTL for a
     /// deterministic freshness window.
-    private let ttl: TimeInterval
+    private let ttlOverride: TimeInterval?
     /// The menu-bar app deliberately refreshes once per launch, even when its persisted snapshot is
     /// young. A one-shot reader has no meaningful session, so it opts into timestamp-only freshness.
     private let allowsPersistedFreshness: Bool
@@ -63,13 +63,13 @@ struct ProviderSnapshotCache {
         // limits/plan instead of painting them under the new account's card. Refetch on upgrade so every
         // retained entry carries a stamp from its first write.
         storageKey: String = "openusage.providerSnapshots.v9",
-        ttl: TimeInterval = RefreshSetting.interval,
+        ttl: TimeInterval? = nil,
         allowsPersistedFreshness: Bool = false,
         now: @escaping () -> Date = Date.init
     ) {
         self.userDefaults = userDefaults
         self.storageKey = storageKey
-        self.ttl = ttl
+        self.ttlOverride = ttl
         self.allowsPersistedFreshness = allowsPersistedFreshness
         self.now = now
         let encoder = JSONEncoder()
@@ -92,7 +92,7 @@ struct ProviderSnapshotCache {
         return loaded
     }
 
-    func snapshot(providerID: String) -> ProviderSnapshot? {
+    func snapshot(providerID: String, refreshSetting: RefreshSetting = RefreshSetting()) -> ProviderSnapshot? {
         let snapshot = loadPayload().snapshots[providerID]
         guard let snapshot else { return nil }
         // Freshness has two requirements, and disk age alone is not enough: the snapshot must have been
@@ -101,6 +101,7 @@ struct ProviderSnapshotCache {
         // promptly instead of waiting out the previous session's remaining interval (#697).
         let writtenThisSession = sessionWrites.withLock { $0.contains(providerID) }
         let age = now().timeIntervalSince(snapshot.refreshedAt)
+        let ttl = ttlOverride ?? refreshSetting.interval(for: providerID)
         let trusted = allowsPersistedFreshness || writtenThisSession
         let fresh = trusted && age < ttl
         let reason = !trusted ? "stale (not written this session)"

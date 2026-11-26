@@ -32,9 +32,9 @@ normalized format. Quotas, plans, balances, and provider errors remain this Mac'
 those snapshots. Rows retained in an older peer file are ignored once they fall outside the same
 calendar window used by the local history scanners.
 
-This Mac updates its file after a five-minute refresh batch, a manual refresh, or a provider enablement
-change. iCloud delivery is eventually consistent, so another Mac can take longer than five minutes to
-receive it, especially while offline. Downloaded changes reload immediately when macOS reports them.
+This Mac updates its file after a successful automatic or manual refresh, or when you turn a provider
+on or off. iCloud delivery can take longer than the refresh interval, especially while a Mac is
+offline. Downloaded changes reload immediately when macOS reports them.
 
 Settings lists each valid device file with the time that Mac generated it. To remove a Mac from the
 combined summary, turn sync off on that Mac; this deletes its file from iCloud. Turning sync off also

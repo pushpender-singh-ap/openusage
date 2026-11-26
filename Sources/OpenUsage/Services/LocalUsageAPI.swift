@@ -19,6 +19,7 @@ enum LocalUsageAPI {
         /// Only descriptors explicitly opted into the stable limits contract.
         var limitDescriptors: [String: [WidgetDescriptor]] = [:]
         var errors: [String: String] = [:]
+        var refreshSetting = RefreshSetting()
         var generatedAt = Date()
 
         /// Every known card the request token names — an exact card id, or a family id naming all of

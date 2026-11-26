@@ -14,6 +14,7 @@ enum LocalLimitsAPI {
             providers[providerID] = WireProvider(
                 snapshot: snapshot,
                 descriptors: descriptors,
+                interval: state.refreshSetting.interval(for: providerID),
                 generatedAt: state.generatedAt
             )
         }
@@ -59,11 +60,11 @@ enum LocalLimitsAPI {
         let stale: Bool
         let resources: [String: WireResource]
 
-        init(snapshot: ProviderSnapshot, descriptors: [WidgetDescriptor], generatedAt: Date) {
+        init(snapshot: ProviderSnapshot, descriptors: [WidgetDescriptor], interval: TimeInterval, generatedAt: Date) {
             displayName = snapshot.displayName
             plan = snapshot.plan
             fetchedAt = OpenUsageISO8601.string(from: snapshot.refreshedAt)
-            let expiry = snapshot.refreshedAt.addingTimeInterval(RefreshSetting.interval)
+            let expiry = snapshot.refreshedAt.addingTimeInterval(interval)
             expiresAt = OpenUsageISO8601.string(from: expiry)
             stale = generatedAt >= expiry
 

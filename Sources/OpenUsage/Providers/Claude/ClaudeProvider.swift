@@ -32,7 +32,6 @@ final class ClaudeProvider: ProviderRuntime {
     private var verifiedCredentialFingerprint: Data?
     private var lastGoodUsage: ClaudeMappedUsage?
     private var rateLimitedUntil: Date?
-    private static let rateLimitCooldown: TimeInterval = 5 * 60
     /// The account-stamped snapshot painted from the launch cache (see `adoptLaunchSnapshot`). Held in
     /// memory only, so the first 429 after a relaunch can keep the painted limits instead of a bare badge.
     /// A successful live fetch discards it; only a login verified against the card's account consumes it.
@@ -425,7 +424,8 @@ final class ClaudeProvider: ProviderRuntime {
         // (respecting Retry-After) and serve the last-good usage rather than a bare badge.
         if response.statusCode == 429 {
             let retryAfterSeconds = ClaudeUsageMapper.parseRetryAfterSeconds(response, now: now())
-            rateLimitedUntil = now().addingTimeInterval(TimeInterval(retryAfterSeconds ?? Int(Self.rateLimitCooldown)))
+            let cooldown = retryAfterSeconds ?? RefreshSetting.minimumMinutes(for: provider.id) * 60
+            rateLimitedUntil = now().addingTimeInterval(TimeInterval(cooldown))
             adoptPendingLaunchUsageIfVerified(credentials: working.oauth)
             AppLog.info(LogTag.plugin("claude"), "rate-limited (serving \(lastGoodUsage == nil ? "badge" : "last-good usage"))")
             return rateLimitedSnapshot(credentials: working.oauth, retryAfterSeconds: retryAfterSeconds)

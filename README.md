@@ -42,8 +42,8 @@ Most providers read the credentials already on your machine (keychain, auth file
 - **Dashboard popover.** Provider-grouped meters with live reset countdowns and pace indicators. Click usage or reset values to flip their display everywhere; right-click a row to hide or star it, refresh its provider, or open Customize.
 - **Global shortcut.** Toggle the popover from anywhere — record any combo in Settings.
 - **Customize.** Turn providers and metrics on or off, choose which rows stay Always Visible or On Demand, and drag-reorder both.
-- **Stale-while-revalidate.** Cached values display instantly at launch; refresh runs every 5 minutes.
-- **[One-shot CLI](docs/cli.md).** Agents can read stable limit JSON through the same five-minute cache with `openusage`, or bypass freshness with `openusage --force`; the menu-bar app does not need to be running.
+- **Stale-while-revalidate.** Cached values display instantly at launch. Automatic checks default to every 10 minutes for Claude and every 5 minutes for other providers. Set each interval in Settings.
+- **[One-shot CLI](docs/cli.md).** Agents can read stable limit JSON through the same provider-specific cache with `openusage`, or request fresh data with `openusage --force`, even when the menu-bar app is closed.
 - **[Local HTTP API](docs/local-http-api.md).** Other apps can read machine-friendly limits from `127.0.0.1:6736/v1/limits`; the legacy `/v1/usage` UI contract remains supported. It is loopback-only and never serves credentials; note that browser pages can read it too — see the [privacy note](docs/local-http-api.md#cors-and-privacy).
 - **[Proxy support](docs/proxy.md).** Route provider requests through SOCKS5 or HTTP(S) via `~/.openusage/config.json`.
 - **Native settings.** Launch at login, global shortcut, icon style, theme, density, 12/24-hour time — see [Settings](docs/settings.md).

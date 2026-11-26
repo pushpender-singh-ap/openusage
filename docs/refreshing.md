@@ -2,10 +2,11 @@
 
 ## When data updates
 
-- All enabled providers refresh together: once at launch, then every 5 minutes (a fixed cadence — there's no setting for it). Opening the popover does not start a second automatic pass. Providers fetch in parallel, so fast cards update without waiting for a slow one; close-together results are briefly grouped so a burst shows as one update and is saved once (adapted from Runway (mstallone/runway) #47, MIT). The batch itself still finishes only after every provider returns; notifications, history sync, and the next five-minute wait begin after that point.
-- Turning a provider on (yourself in Customize, or automatically by first-launch/new-provider detection) fetches it promptly instead of waiting out the interval — even when the change lands in the middle of a refresh that's already running.
-- The Dashboard and Settings footer shows `Next update in Nm`. **Clicking it (or pressing ⌘R while that footer is present)** refreshes immediately, skipping the cache.
-- The one-shot `openusage` command reuses this same persisted cache for five minutes, refreshes missing or stale entries without starting the app, and exits. `openusage --force` runs the same forced provider refresh as ⌘R regardless of cache age.
+- Enabled providers refresh at launch. After that, Claude checks every 10 minutes by default and the other providers check every 5 minutes. Change a provider's interval in **Settings → Automatic Refresh**. The choice applies immediately to all its accounts.
+- Providers due together fetch in parallel. Fast cards update as results arrive, and nearby results are grouped into one update and save (adapted from Runway #47, MIT). Opening the popover leaves the schedule in place.
+- Turning on a provider that hasn't been checked this session fetches it promptly, even during another refresh. A recent Claude check, including a failed attempt, counts toward its next automatic check.
+- The Dashboard and Settings footer counts down to the next enabled provider's check. **Click the countdown or press ⌘R** to refresh immediately. A manual check starts a new interval for the providers it checks.
+- The one-shot `openusage` command uses each provider's interval to decide when to reuse its saved data. `openusage --force` skips that freshness check, like ⌘R.
 - While a provider is fetching, a small spinner appears next to its name (and one shows in the footer beside the countdown), so you can tell a refresh is in flight rather than wondering if the numbers are stale.
 - With [iCloud Sync](icloud-sync.md) on, a refresh batch writes one machine-history file after the whole
   batch finishes. Manual provider refreshes write after that provider finishes, and adjacent changes are
@@ -44,6 +45,8 @@ event markers in one pass, also adapted from Runway #45.
 
 A failed refresh **never wipes your data**: the last good values stay on screen, and a small warning triangle appears next to the provider's name — hover it for the error message (e.g. "Not logged in"). The error clears on the next successful refresh.
 
+When Anthropic rate-limits Claude, OpenUsage honors its retry delay, including on manual refreshes in the running app. If Anthropic omits the delay, OpenUsage waits 10 minutes. A longer delay can span several scheduled checks.
+
 A provider that stops responding altogether is given up on after two minutes. Its spinner stops, the
 warning triangle reads "Refresh timed out after 120s", and it is tried again on a later pass — so one
 stuck provider can't leave a spinner turning for the rest of the session. The wait is deliberately long:
@@ -66,4 +69,4 @@ Some logins live in your macOS Keychain, and macOS asks before OpenUsage can rea
 
 ## Stale data
 
-Because a failed refresh keeps the last good values on screen, those values can persist if refreshes keep failing — so a plan or limit that changed on the provider's side could otherwise keep showing the old figures indefinitely. To make that obvious, a small **"Outdated"** tag appears next to the provider's name once its data is more than a couple of refresh cycles old (about ten minutes); hover it for the precise age ("Last updated 3h ago"). The tag stays short so it never crowds a long plan name. When you see it, the numbers below are from that earlier time, not live — usually because the provider is failing to refresh (check the warning triangle) or the Mac was asleep. A successful refresh clears it.
+An **Outdated** tag appears when a provider's displayed data reaches twice its selected interval. At the defaults, that's 20 minutes for Claude and 10 minutes for other providers. Hover over the tag for the age of the last successful update.

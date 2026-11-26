@@ -70,6 +70,32 @@ final class UsageReaderTests: XCTestCase {
         ))
     }
 
+    func testSavedClaudeIntervalDrivesBothOneShotCachingAndReportedExpiry() async throws {
+        let defaults = defaults()
+        var settings = RefreshSetting()
+        settings.setMinutes(15, for: "claude")
+        settings.save(to: defaults)
+        let claude = StubProvider(id: "claude@account")
+        let codex = StubProvider(id: "codex")
+        let fetchedAt = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down) - 12 * 60)
+        let cache = ProviderSnapshotCache(userDefaults: defaults)
+        for provider in [claude, codex] {
+            provider.refreshedAt = fetchedAt
+            cache.store(await provider.refresh())
+            provider.refreshCount = 0
+            provider.refreshedAt = Date()
+        }
+
+        let result = try await UsageReader(userDefaults: defaults, providers: [claude, codex]).read()
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: result.data) as? [String: Any])
+        let providers = try XCTUnwrap(root["providers"] as? [String: [String: Any]])
+        XCTAssertEqual(claude.refreshCount, 0)
+        XCTAssertEqual(codex.refreshCount, 1)
+        XCTAssertEqual(providers["claude@account"]?["stale"] as? Bool, false)
+        XCTAssertEqual(providers["claude@account"]?["expiresAt"] as? String,
+                       OpenUsageISO8601.string(from: fetchedAt.addingTimeInterval(15 * 60)))
+    }
+
     func testRefreshAllPersistsSnapshotsBeforeOneShotReaderReturns() async throws {
         let defaults = defaults()
         defaults.set(["alpha", "beta"], forKey: "openusage.enabledProviders.v1")
@@ -84,7 +110,7 @@ final class UsageReaderTests: XCTestCase {
     func testStalePersistedSnapshotRefreshesBeforeReading() async throws {
         let defaults = defaults()
         let provider = StubProvider()
-        provider.refreshedAt = Date().addingTimeInterval(-RefreshSetting.interval - 1)
+        provider.refreshedAt = Date().addingTimeInterval(-5 * 60 - 1)
         ProviderSnapshotCache(userDefaults: defaults).store(await provider.refresh())
         provider.refreshCount = 0
         provider.refreshedAt = Date()

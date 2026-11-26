@@ -30,7 +30,7 @@ The release default is **Info** — quiet but useful. **Debug** is opt-in; turn 
 reproducing a problem, since it is much noisier.
 
 If a local usage log exists but cannot be read, OpenUsage writes one warning and skips it for that
-refresh. It does not repeat the warning every five minutes; it warns again only if the file recovers
+refresh. It does not repeat the warning on every refresh; it warns again only if the file recovers
 and later becomes unreadable again.
 
 Any provider refresh that takes 10 seconds or longer writes a Warning-level `[refresh]` line with the

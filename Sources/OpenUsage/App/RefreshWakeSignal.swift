@@ -1,7 +1,7 @@
 import Foundation
 
 /// The refresh loop's between-passes wait: sleeps one refresh interval, but wakes early when the
-/// enabled-provider set changes — and, crucially, never loses a change that lands *during* a pass.
+/// enabled-provider set or its refresh intervals change, including changes that land during a pass.
 ///
 /// The bug this replaces: the loop used to subscribe to
 /// `ProviderEnablementStore.didChangeNotification` only inside its wait, after `refreshAll()` had
@@ -23,10 +23,10 @@ final class RefreshWakeSignal {
     private let center: NotificationCenter
     /// `nonisolated(unsafe)` so the nonisolated `deinit` can unregister the observer; it is immutable
     /// after `init`, and `NotificationCenter` is documented thread-safe.
-    private nonisolated(unsafe) let observer: NSObjectProtocol
+    private nonisolated(unsafe) let observers: [NSObjectProtocol]
 
     init(
-        name: Notification.Name = ProviderEnablementStore.didChangeNotification,
+        names: [Notification.Name] = [ProviderEnablementStore.didChangeNotification, RefreshSetting.didChangeNotification],
         center: NotificationCenter = .default
     ) {
         let (stream, continuation) = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
@@ -35,13 +35,15 @@ final class RefreshWakeSignal {
         self.center = center
         // Registered synchronously, so no notification posted after `init` returns can be missed.
         // The continuation is `Sendable`; yielding from whatever context posts is safe.
-        self.observer = center.addObserver(forName: name, object: nil, queue: nil) { _ in
-            continuation.yield()
+        self.observers = names.map { name in
+            center.addObserver(forName: name, object: nil, queue: nil) { _ in
+                continuation.yield()
+            }
         }
     }
 
     deinit {
-        center.removeObserver(observer)
+        for observer in observers { center.removeObserver(observer) }
         continuation.finish()
     }
 
